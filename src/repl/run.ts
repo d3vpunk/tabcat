@@ -22,7 +22,9 @@ export interface ReplCommandContext {
 export type ReplCommandResult = 'unhandled' | 'handled' | 'meow' | 'exit';
 
 export function handleReplCommand(line: string, context: ReplCommandContext): ReplCommandResult {
-  const command = /^[:/](\w+)$/.exec(line)?.[1];
+  // Colon is the single magic prefix — a leading '/' collides with absolute
+  // paths and had no dropdown hints, so ':' is the only recognized form.
+  const command = /^:(\w+)$/.exec(line)?.[1];
   const showOutput = context.showOutput ?? showReplOutput;
   switch (command) {
     case 'help':

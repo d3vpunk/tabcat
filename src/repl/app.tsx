@@ -48,7 +48,7 @@ export function trackCompletion(
 }
 
 const HELP_COMMANDS = [
-  [':help, /help', 'This help'],
+  [':help', 'This help'],
   [':history', 'Last 10 commands'],
   [':stats', 'History overview'],
   [':version', 'tabcat version'],

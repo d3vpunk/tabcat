@@ -23,10 +23,10 @@ describe('REPL environment', () => {
 describe('REPL commands', () => {
   const context = { cwd: '/work', historyFile: '/history.jsonl', entries: [] };
 
-  it.each([':help', '/help'])('shows help for %s', (line) => {
+  it('shows help for :help', () => {
     let shown = 0;
 
-    expect(handleReplCommand(line, { ...context, showHelp: () => shown++ })).toBe('handled');
+    expect(handleReplCommand(':help', { ...context, showHelp: () => shown++ })).toBe('handled');
     expect(shown).toBe(1);
   });
 
@@ -51,7 +51,7 @@ describe('REPL commands', () => {
     const commandContext = { ...context, entries, showOutput: (value: ReplOutput) => output.push(value) };
 
     expect(handleReplCommand(':stats', commandContext)).toBe('handled');
-    expect(handleReplCommand('/version', commandContext)).toBe('handled');
+    expect(handleReplCommand(':version', commandContext)).toBe('handled');
     expect(handleReplCommand(':cwd', commandContext)).toBe('handled');
     expect(output[0]).toMatchObject({
       kind: 'stats',
@@ -66,17 +66,22 @@ describe('REPL commands', () => {
     let cleared = 0;
     expect(handleReplCommand(':clear', { ...context, clear: () => cleared++ })).toBe('handled');
     expect(cleared).toBe(1);
-    expect(handleReplCommand('/exit', context)).toBe('exit');
+    expect(handleReplCommand(':exit', context)).toBe('exit');
   });
 
   it('dispatches the cat animation', () => {
     expect(handleReplCommand(':meow', context)).toBe('meow');
-    expect(handleReplCommand('/meow', context)).toBe('meow');
   });
 
   it('passes unknown magic commands through to the shell', () => {
     expect(handleReplCommand(':unknown', context)).toBe('unhandled');
     expect(handleReplCommand('/usr/bin/env', context)).toBe('unhandled');
+  });
+
+  it('does not treat the slash prefix as a magic command', () => {
+    expect(handleReplCommand('/help', context)).toBe('unhandled');
+    expect(handleReplCommand('/meow', context)).toBe('unhandled');
+    expect(handleReplCommand('/exit', context)).toBe('unhandled');
   });
 });
 
