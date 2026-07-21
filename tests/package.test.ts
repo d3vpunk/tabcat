@@ -17,7 +17,7 @@ describe('npm package', () => {
   });
 
   it('publishes only built runtime files and documentation', () => {
-    expect(manifest.files).toEqual(['dist/', 'README.md']);
+    expect(manifest.files).toEqual(['dist/', 'README.md', 'LICENSE']);
   });
 
   it('links tabcat to the built CLI entry point', () => {
