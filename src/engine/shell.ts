@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { statSync } from 'node:fs';
 import { HistoryEntry } from './model.js';
 import { parseZshHistory } from './zsh-import.js';
 import { parseBashHistory } from './bash-import.js';
@@ -63,10 +64,51 @@ export function detectShell(
     : [bashShell, zshShell];
 
   const available = candidates.find((shell) => isAvailable(shell.file));
-  if (available) return available;
+  // Spawn via the absolute binary path, not the bare name: the child's PATH is
+  // not guaranteed to contain the shell's directory (launched from a GUI, a
+  // stripped env, a non-login context), which surfaced as `spawnSync zsh ENOENT`
+  // at command time even though startup detection had passed.
+  if (available) return { ...available, file: resolveShellPath(available, env) };
 
   const configuredHint = env['SHELL'] ? ` ($SHELL=${env['SHELL']})` : '';
   throw new Error(`No supported shell found${configuredHint}. tabcat requires bash or zsh in PATH.`);
+}
+
+/**
+ * Absolute path to the shell binary: prefer $SHELL when it points at this very
+ * shell, then search PATH and the well-known install locations. Falls back to
+ * the bare name (spawn resolves it against PATH at run time) so behavior is
+ * never worse than before.
+ */
+export function resolveShellPath(
+  shell: ShellAdapter,
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (path: string) => boolean = isExecutableFile,
+): string {
+  const configured = env['SHELL'];
+  if (configured && configured.split('/').at(-1) === shell.name && exists(configured)) {
+    return configured;
+  }
+  const dirs = [
+    ...(env['PATH']?.split(':').filter(Boolean) ?? []),
+    '/bin',
+    '/usr/bin',
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+  ];
+  for (const dir of dirs) {
+    const full = `${dir}/${shell.name}`;
+    if (exists(full)) return full;
+  }
+  return shell.name;
+}
+
+function isExecutableFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function shellFromPath(path: string | undefined): ShellAdapter | undefined {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bashShell, detectShell, zshShell } from '../../src/engine/shell.js';
+import { bashShell, detectShell, resolveShellPath, zshShell } from '../../src/engine/shell.js';
 
 describe('detectShell', () => {
   const available = (...names: string[]) => (file: string) => names.includes(file);
@@ -28,6 +28,28 @@ describe('detectShell', () => {
     expect(() => detectShell({ SHELL: '/usr/bin/fish' }, available())).toThrow(
       'No supported shell found ($SHELL=/usr/bin/fish). tabcat requires bash or zsh in PATH.',
     );
+  });
+});
+
+describe('resolveShellPath', () => {
+  it('prefers $SHELL when it points at this shell and exists', () => {
+    const exists = (p: string) => p === '/bin/zsh';
+    expect(resolveShellPath(zshShell, { SHELL: '/bin/zsh' }, exists)).toBe('/bin/zsh');
+  });
+
+  it('ignores $SHELL for a different shell and searches PATH', () => {
+    const exists = (p: string) => p === '/usr/local/bin/bash';
+    expect(resolveShellPath(bashShell, { SHELL: '/bin/zsh', PATH: '/usr/local/bin:/usr/bin' }, exists))
+      .toBe('/usr/local/bin/bash');
+  });
+
+  it('falls back to well-known locations when PATH lacks the shell', () => {
+    const exists = (p: string) => p === '/bin/zsh';
+    expect(resolveShellPath(zshShell, { PATH: '/nowhere' }, exists)).toBe('/bin/zsh');
+  });
+
+  it('falls back to the bare name when nothing is found', () => {
+    expect(resolveShellPath(bashShell, { PATH: '/nowhere' }, () => false)).toBe('bash');
   });
 });
 
