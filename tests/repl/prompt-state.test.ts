@@ -214,8 +214,8 @@ describe('Prompt state: history navigation', () => {
     expect(down.historyIndex).toBeNull();
   });
 
-  it('up with visible dropdown and typed line starts substring search (fish-style)', () => {
-    const state: PromptState = { ...initialPromptState, line: 'git', cursor: 3, selected: 1 };
+  it('up with the dropdown at rest and a typed line starts substring search (fish-style)', () => {
+    const state: PromptState = { ...initialPromptState, line: 'git', cursor: 3, selected: 0 };
     const context = ctx({
       candidates: [candidate('git'), candidate('git status', ' status')],
       prefix: 'git',
@@ -281,6 +281,24 @@ describe('Prompt state: history navigation', () => {
     const up = press(state, key('', { upArrow: true }), context);
     expect(up.historyFilter).toBeNull();
     expect(up.selected).toBe(2); // Dropdown-Cycle wrap
+  });
+
+  it('after scrolling the list down, up scrolls back up instead of searching history', () => {
+    // Emil's report: ↓ scrolls the suggestion list, but ↑ jumped into history
+    // search instead of scrolling back up. Once selected > 0, ↑ must cycle up.
+    const context = ctx({
+      candidates: [candidate('npm run build'), candidate('npm run test'), candidate('npm run lint')],
+      prefix: 'npm run ',
+      recentUnique: ['npm run build', 'make'],
+    });
+    const typed: PromptState = { ...initialPromptState, line: 'npm run ', cursor: 8, selected: 0 };
+    const down = press(typed, key('', { downArrow: true }), context);
+    expect(down.selected).toBe(1);
+
+    const up = press(down, key('', { upArrow: true }), context);
+    expect(up.selected).toBe(0);
+    expect(up.historyFilter).toBeNull(); // did NOT hijack into history search
+    expect(up.line).toBe('npm run ');
   });
 
   it('dropdown selection cycles through all candidates', () => {

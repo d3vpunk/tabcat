@@ -342,15 +342,23 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
   // - Empty line: history navigation, like a standard shell — the last command
   //   (including a failed one) comes back on the first ↑, even with a frecency
   //   dropdown showing. Tab still accepts the top dropdown candidate.
-  // - Non-empty line + visible dropdown: fish-style substring search through
-  //   history (↑ older hit, ↓ newer). Only when the line has no history match
-  //   do ↑/↓ cycle the dropdown selection.
+  // - Non-empty line, dropdown at rest (selected === 0): ↑ starts a fish-style
+  //   substring search through history. Once you have started scrolling the
+  //   list with ↓ (selected > 0), ↑ scrolls back up the list instead — so the
+  //   list navigates symmetrically and does not hijack into history mid-scroll.
   // Esc hides the dropdown -> history gets through.
   if (key.upArrow) {
-    // fish-style substring search: non-empty line + visible dropdown
-    // starts the search. startSubstringSearch returns state unchanged if
-    // there are no hits — then it falls into the dropdown cycle below.
-    if (state.line !== '' && state.dropdownVisible && state.historyFilter === null && state.historyIndex === null) {
+    // fish-style substring search: non-empty line + dropdown at rest starts the
+    // search. Skipped once the list is being scrolled (selected > 0) so ↑ walks
+    // back up the list. startSubstringSearch returns state unchanged when there
+    // are no hits — then it falls into the dropdown cycle below.
+    if (
+      state.line !== '' &&
+      state.dropdownVisible &&
+      state.selected === 0 &&
+      state.historyFilter === null &&
+      state.historyIndex === null
+    ) {
       const started = startSubstringSearch(state, ctx);
       if (started !== state) return update(started);
     }
