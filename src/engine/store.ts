@@ -110,6 +110,43 @@ function isLockBusy(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ELOCKED';
 }
 
+/**
+ * Stable identity of an entry. \u0001 as separator: never occurs in
+ * cwd/command lines (a space would be ambiguous: "1 /a b c" = cwd '/a b' + 'c'
+ * or cwd '/a' + 'b c').
+ */
+export const entryKey = (e: HistoryEntry): string => `${e.ts}${e.line}`;
+
+/**
+ * Which incoming entries are genuinely new versus the existing history.
+ *
+ * Entries with a real timestamp dedupe on (ts, line): the SAME command run at
+ * two different times are two legitimate occurrences and both survive.
+ *
+ * Entries WITHOUT a real timestamp were stamped with `fallbackTs` by the
+ * parser (plain history — no EXTENDED_HISTORY / HISTTIMEFORMAT). `fallbackTs`
+ * is chosen fresh per import run, so (ts, line) would never match across runs
+ * and re-imports would pile up duplicates. Those dedupe on the line alone —
+ * making re-imports idempotent, as documented.
+ */
+export function dedupeImportEntries(
+  existing: readonly HistoryEntry[],
+  incoming: readonly HistoryEntry[],
+  fallbackTs: number,
+): HistoryEntry[] {
+  const seenKeys = new Set(existing.map(entryKey));
+  const seenLines = new Set(existing.map((e) => e.line));
+  const fresh: HistoryEntry[] = [];
+  for (const entry of incoming) {
+    const synthesized = entry.ts === fallbackTs; // parser had no real timestamp
+    if (synthesized ? seenLines.has(entry.line) : seenKeys.has(entryKey(entry))) continue;
+    seenKeys.add(entryKey(entry));
+    seenLines.add(entry.line);
+    fresh.push(entry);
+  }
+  return fresh;
+}
+
 function isHistoryEntry(value: unknown): value is HistoryEntry {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;

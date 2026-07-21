@@ -3,9 +3,45 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HistoryEntry } from '../../src/engine/model.js';
-import { appendHistory, compactHistory, readHistory } from '../../src/engine/store.js';
+import { appendHistory, compactHistory, dedupeImportEntries, readHistory } from '../../src/engine/store.js';
 
 const entry = (n: number): HistoryEntry => ({ ts: n, cwd: '/x', line: `cmd-${n}` });
+
+describe('store: dedupeImportEntries', () => {
+  const line = (ts: number, text: string): HistoryEntry => ({ ts, cwd: null, line: text });
+
+  it('fallback (plain-history) re-import is idempotent across runs', () => {
+    // First import: parser stamped every line with fallbackTs = 100.
+    const first = dedupeImportEntries([], [line(100, 'git status'), line(100, 'npm test')], 100);
+    expect(first.map((e) => e.line)).toEqual(['git status', 'npm test']);
+
+    // Second import days later: fresh fallbackTs = 500, same commands.
+    // Line-only dedup keeps it idempotent despite the changed timestamp.
+    const second = dedupeImportEntries(first, [line(500, 'git status'), line(500, 'npm test')], 500);
+    expect(second).toEqual([]);
+  });
+
+  it('keeps genuinely new fallback lines on re-import', () => {
+    const existing = [line(100, 'git status')];
+    const fresh = dedupeImportEntries(existing, [line(500, 'git status'), line(500, 'git push')], 500);
+    expect(fresh.map((e) => e.line)).toEqual(['git push']);
+  });
+
+  it('timestamped entries: same command at different times both survive', () => {
+    const fresh = dedupeImportEntries([], [line(1000, 'ls'), line(2000, 'ls')], 999);
+    expect(fresh.map((e) => e.ts)).toEqual([1000, 2000]);
+  });
+
+  it('timestamped entry deduped against identical existing (ts, line)', () => {
+    const fresh = dedupeImportEntries([line(1000, 'ls')], [line(1000, 'ls'), line(2000, 'ls')], 999);
+    expect(fresh.map((e) => e.ts)).toEqual([2000]);
+  });
+
+  it('within-source fallback duplicates collapse to one', () => {
+    const fresh = dedupeImportEntries([], [line(100, 'ls'), line(100, 'ls')], 100);
+    expect(fresh).toHaveLength(1);
+  });
+});
 
 describe('store: compactHistory', () => {
   let dir: string;

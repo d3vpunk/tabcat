@@ -5,14 +5,11 @@ import { CliArgumentError, commandUsage, parseCliArgs } from './cli-args.js';
 import { HistoryEntry } from './engine/model.js';
 import { Predictor } from './engine/predictor.js';
 import { detectShell } from './engine/shell.js';
-import { MAX_HISTORY_ENTRIES, appendHistory, defaultHistoryFile, readHistory } from './engine/store.js';
+import { MAX_HISTORY_ENTRIES, appendHistory, dedupeImportEntries, defaultHistoryFile, readHistory } from './engine/store.js';
 import { realFs } from './repl/real-fs.js';
 import { runRepl } from './repl/run.js';
 import { VERSION } from './version.js';
 
-// \u0001 as separator: never occurs in cwd/command lines (space would be
-// ambiguous: "1 /a b c" = cwd '/a b' + 'c' or cwd '/a' + 'b c').
-const entryKey = (e: HistoryEntry): string => `${e.ts}\u0001${e.line}`;
 
 const readHistoryWithWarning = (file: string): HistoryEntry[] =>
   readHistory(file, (count) => console.error(`tabcat: skipped ${count} invalid history line(s) (${file}).`));
@@ -99,18 +96,12 @@ switch (args.command) {
     const thirtyDaysAgo = Date.now() - 30 * 86_400_000;
     const entries = shell.parseHistory(readFileSync(source, 'utf8'), null, thirtyDaysAgo);
 
-    // Dedup against the existing history (re-import is idempotent) and
-    // against duplicates within the source.
-    const seen = new Set(readHistoryWithWarning(target).map(entryKey));
-    let added = 0;
-    for (const entry of entries) {
-      const key = entryKey(entry);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      appendHistory(target, entry);
-      added++;
-    }
-    console.log(`Imported ${added} new entries (${entries.length - added} duplicates skipped) into ${target}`);
+    // Dedup against the existing history and within the source. Timestamped
+    // entries key on (ts, line); parser-stamped fallback entries (plain
+    // history) key on the line alone so re-imports stay idempotent.
+    const fresh = dedupeImportEntries(readHistoryWithWarning(target), entries, thirtyDaysAgo);
+    for (const entry of fresh) appendHistory(target, entry);
+    console.log(`Imported ${fresh.length} new entries (${entries.length - fresh.length} duplicates skipped) into ${target}`);
     break;
   }
 
