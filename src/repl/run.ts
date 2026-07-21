@@ -147,7 +147,9 @@ export async function runRepl(historyFile: string = defaultHistoryFile()): Promi
 
     // cwd attribution: we learn WHERE the line was typed — not where cd led.
     const typedCwd = cwd;
-    const execution = execute(line, cwd, shell, snapshotFile);
+    // historyLines are the commands BEFORE this one — the exec shell's `history`
+    // reflects the session up to (not including) the running command, shell-like.
+    const execution = execute(line, cwd, shell, snapshotFile, historyLines);
     cwd = execution.cwd;
     lastExitCode = execution.exitCode;
 

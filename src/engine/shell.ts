@@ -22,6 +22,13 @@ export interface ShellAdapter {
    * aliases in non-interactive shells with expand_aliases; zsh needs nothing.
    */
   readonly execPreamble: string;
+  /**
+   * Shell code that loads tabcat's recent commands (written to `historyFile`,
+   * one per line) into the exec shell so `history` / `fc` / oh-my-zsh's
+   * `omz_history` work — the isolated one-shot shell otherwise has an empty
+   * event list and `fc` errors with "no such event".
+   */
+  historyPreamble(historyFile: string, size: number): string;
   defaultHistoryPath(homeDir: string): string;
   parseHistory(content: string, cwd: string | null, fallbackTs: number): HistoryEntry[];
 }
@@ -40,6 +47,7 @@ export const zshShell: ShellAdapter = {
   },
   execArgs: (script) => ['-fc', script],
   execPreamble: '',
+  historyPreamble: (historyFile, size) => `HISTSIZE=${size}; fc -R ${quote(historyFile)} 2>/dev/null || true`,
   defaultHistoryPath: (homeDir) => `${homeDir}/.zsh_history`,
   parseHistory: parseZshHistory,
 };
@@ -56,6 +64,8 @@ export const bashShell: ShellAdapter = {
   },
   execArgs: (script) => ['-c', script],
   execPreamble: 'shopt -s expand_aliases',
+  historyPreamble: (historyFile, size) =>
+    `set -o history; HISTSIZE=${size}; history -r ${quote(historyFile)} 2>/dev/null || true`,
   defaultHistoryPath: (homeDir) => `${homeDir}/.bash_history`,
   parseHistory: parseBashHistory,
 };

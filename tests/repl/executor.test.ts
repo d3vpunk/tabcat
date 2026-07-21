@@ -31,6 +31,21 @@ describe('executor', () => {
     expect(result.exitCode).toBe(130);
   });
 
+  it.skipIf(!hasZsh)('seeds tabcat history so zsh `fc`/`history` list past commands', () => {
+    const seeded = ['git status', 'npm run build', 'tabcat_marker_cmd'];
+    // fc -l reads the loaded event list; grep sets the exit code without
+    // needing to capture the inherited stdout.
+    expect(execute('fc -l | grep -q tabcat_marker_cmd', process.cwd(), zshShell, '', seeded).exitCode).toBe(0);
+    // Without a seed the exec shell has no events -> fc lists nothing.
+    expect(execute('fc -l | grep -q tabcat_marker_cmd', process.cwd(), zshShell, '', []).exitCode).not.toBe(0);
+  });
+
+  it.skipIf(!hasBash)('seeds tabcat history so bash `history` lists past commands', () => {
+    const seeded = ['git status', 'npm run build', 'tabcat_marker_cmd'];
+    expect(execute('history | grep -q tabcat_marker_cmd', process.cwd(), bashShell, '', seeded).exitCode).toBe(0);
+    expect(execute('history | grep -q tabcat_marker_cmd', process.cwd(), bashShell, '', []).exitCode).not.toBe(0);
+  });
+
   it.skipIf(!hasBash)('bash adapter: execution + cwd persistence + expand_aliases preamble', () => {
     // bash must accept shopt in the preamble, otherwise even `true` fails.
     const result = execute('cd /tmp && true', process.cwd(), bashShell);

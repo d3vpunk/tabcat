@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ShellAdapter, detectShell } from '../engine/shell.js';
@@ -8,6 +8,13 @@ export interface ExecutionResult {
   cwd: string;
   exitCode: number;
 }
+
+/**
+ * How many recent commands are loaded into each exec shell for `history`/`fc`.
+ * Capped so a large learned history does not cost a full write per command —
+ * `history` shows the recent tail anyway.
+ */
+export const SEED_HISTORY_ENTRIES = 1000;
 
 export interface ShellSnapshot {
   /** Path to a file with re-sourceable aliases + functions from the login rc. */
@@ -92,19 +99,34 @@ export function warmShellSnapshot(
  *
  * cwd persistence: the child process writes its $PWD to a temp file at the end.
  * This way combined lines like `cd x && make` also affect the REPL cwd.
+ *
+ * `history` holds tabcat's recent commands (chronological, oldest first). They
+ * are written to a temp file and loaded into the exec shell so `history`/`fc`
+ * reflect the session — the one-shot shell has no event list of its own.
  */
 export function execute(
   line: string,
   cwd: string,
   shell: ShellAdapter = detectShell(),
   snapshotFile = '',
+  history: readonly string[] = [],
 ): ExecutionResult {
   const dir = mkdtempSync(join(tmpdir(), 'tabcat-'));
   const pwdFile = join(dir, 'pwd');
 
+  let historyLoad = '';
+  if (history.length > 0) {
+    const seed = history.slice(-SEED_HISTORY_ENTRIES);
+    const histFile = join(dir, 'history');
+    // 0600: the file holds command history — same sensitivity as the store.
+    writeFileSync(histFile, `${seed.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
+    historyLoad = shell.historyPreamble(histFile, seed.length);
+  }
+
   const wrapped = [
     shell.execPreamble,
     snapshotFile !== '' ? `source ${quote(snapshotFile)}` : '',
+    historyLoad,
     `eval ${quote(line)}`,
     '__tabcat_rc=$?',
     `pwd > ${quote(pwdFile)}`,
