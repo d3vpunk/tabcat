@@ -208,13 +208,17 @@ describe('Prompt state: history navigation', () => {
     expect(upHistory.line).toBe('git status');
   });
 
-  it('a non-empty line without a history match still cycles the dropdown', () => {
+  it('a non-empty line without a history match holds at the top of the dropdown', () => {
     const candidates = [candidate('npm run build'), candidate('npm run test')];
     const context = ctx({ candidates, recentUnique });
     const state: PromptState = { ...initialPromptState, line: 'npm run ', cursor: 8 };
     const up = press(state, key('', { upArrow: true }), context);
 
-    expect(up.selected).toBe(1);
+    // No substring match -> ↑ at selected 0 holds; it must NOT wrap the
+    // selection around to the last candidate (that made the keypress fork
+    // on history contents).
+    expect(up.selected).toBe(0);
+    expect(up.line).toBe('npm run ');
     expect(up.historyIndex).toBeNull();
     expect(up.historyFilter).toBeNull();
   });
@@ -288,7 +292,7 @@ describe('Prompt state: history navigation', () => {
     expect(typed.line).toBe('git stashx');
   });
 
-  it('substring search without matches falls back to dropdown cycling', () => {
+  it('substring search without matches holds at the top of the dropdown', () => {
     const state: PromptState = { ...initialPromptState, line: 'xyz', cursor: 3, selected: 0 };
     const context = ctx({
       candidates: [candidate('xyz'), candidate('xyz-1'), candidate('xyz-2')],
@@ -297,7 +301,7 @@ describe('Prompt state: history navigation', () => {
     });
     const up = press(state, key('', { upArrow: true }), context);
     expect(up.historyFilter).toBeNull();
-    expect(up.selected).toBe(2); // Dropdown-Cycle wrap
+    expect(up.selected).toBe(0); // held at top — no wrap to the last candidate
   });
 
   it('after scrolling the list down, up scrolls back up instead of searching history', () => {
@@ -318,15 +322,21 @@ describe('Prompt state: history navigation', () => {
     expect(up.line).toBe('npm run ');
   });
 
-  it('dropdown selection cycles through all candidates', () => {
+  it('down walks through all candidates and wraps at the bottom back to the top', () => {
     const candidates = Array.from({ length: 8 }, (_, i) => candidate(`cmd-${i}`));
     const context = ctx({ candidates, prefix: 'cmd' });
-    const first: PromptState = { ...initialPromptState, line: 'cmd', cursor: 3 };
-    const wrappedUp = press(first, key('', { upArrow: true }), context);
-    const wrappedDown = press(wrappedUp, key('', { downArrow: true }), context);
+    let state: PromptState = { ...initialPromptState, line: 'cmd', cursor: 3 };
+    for (let i = 0; i < 7; i++) state = press(state, key('', { downArrow: true }), context);
+    expect(state.selected).toBe(7); // 0 -> 1 -> ... -> 7
 
-    expect(wrappedUp.selected).toBe(7);
-    expect(wrappedDown.selected).toBe(0);
+    const wrapped = press(state, key('', { downArrow: true }), context);
+    expect(wrapped.selected).toBe(0); // wraps bottom -> top
+
+    // ↑ walks back up the list; at the top it holds (no wrap to the bottom).
+    const up = press({ ...state, selected: 1 }, key('', { upArrow: true }), context);
+    expect(up.selected).toBe(0);
+    const held = press(up, key('', { upArrow: true }), context);
+    expect(held.selected).toBe(0);
   });
 
   it('history selection discards completion undo context', () => {

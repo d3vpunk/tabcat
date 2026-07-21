@@ -361,6 +361,11 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     ) {
       const started = startSubstringSearch(state, ctx);
       if (started !== state) return update(started);
+      // No history match: ↑ sits at the top of the dropdown (selected === 0)
+      // with nowhere to go. Hold instead of wrapping the selection around to
+      // the last candidate — that jump made the same keypress unpredictable.
+      // With no candidates the block below still falls through to history.
+      if (ctx.candidates.length > 0) return update(state);
     }
     if (state.historyFilter !== null) {
       return update(navigateSubstring(state, -1, ctx));
