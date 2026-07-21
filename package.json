@@ -3,9 +3,32 @@
   "version": "0.1.0",
   "description": "Chunk-based, learning shell autocomplete engine (tab-tab-tab)",
   "type": "module",
+  "license": "MIT",
+  "author": "d3vpunk",
+  "homepage": "https://github.com/d3vpunk/tabcat#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/d3vpunk/tabcat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/d3vpunk/tabcat/issues"
+  },
+  "keywords": [
+    "autocomplete",
+    "completion",
+    "shell",
+    "cli",
+    "repl",
+    "zsh",
+    "bash",
+    "prompt",
+    "frecency",
+    "history"
+  ],
   "files": [
     "dist/",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "bin": {
     "tabcat": "dist/cli.js"
@@ -15,6 +38,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
