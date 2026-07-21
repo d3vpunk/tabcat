@@ -64,6 +64,12 @@ export interface KeyEvent {
     rightArrow?: boolean;
     backspace?: boolean;
     delete?: boolean;
+    /**
+     * Home/End: Ink's useInput does not expose these, so app.tsx detects the
+     * raw escape sequence and dispatches a synthetic event through handleKey.
+     */
+    home?: boolean;
+    end?: boolean;
   };
 }
 
@@ -289,8 +295,8 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
 
   // Readline/zsh muscle memory: line jumps and kills. Kills delete like
   // Backspace -> they also anchor an undo level after an accept.
-  if (key.ctrl && input === 'a') return update({ ...state, cursor: 0 });
-  if (key.ctrl && input === 'e') return update({ ...state, cursor: state.line.length });
+  if ((key.ctrl && input === 'a') || key.home) return update({ ...state, cursor: 0 });
+  if ((key.ctrl && input === 'e') || key.end) return update({ ...state, cursor: state.line.length });
   // Readline char motion (^f/^b): arrows in text form — power-user muscle memory.
   if (key.ctrl && input === 'f') return update({ ...state, cursor: nextBoundary(state.line, state.cursor) });
   if (key.ctrl && input === 'b') return update({ ...state, cursor: previousBoundary(state.line, state.cursor) });

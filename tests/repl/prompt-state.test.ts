@@ -308,6 +308,13 @@ describe('Prompt state: readline shortcuts', () => {
     expect(end.cursor).toBe('git status'.length);
   });
 
+  it('Home / End jump to start / end of line', () => {
+    const home = press(lineState('git status'), key('', { home: true }), ctx());
+    expect(home.cursor).toBe(0);
+    const end = press(home, key('', { end: true }), ctx());
+    expect(end.cursor).toBe('git status'.length);
+  });
+
   it('Ctrl-F / Ctrl-B move the cursor by one code point', () => {
     const forward = press(lineState('git status', 0), key('f', { ctrl: true }), ctx());
     expect(forward.cursor).toBe(1);

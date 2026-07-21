@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Text, render, useApp, useInput } from 'ink';
+import { Box, Text, render, useApp, useInput, useStdin } from 'ink';
 import { Predictor, RankedCandidate } from '../engine/predictor.js';
 import { CompletionTelemetry } from '../engine/model.js';
 import { fuzzySearch } from './history-search.js';
@@ -294,6 +294,7 @@ interface AppProps extends PromptOptions {
 
 function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone }: AppProps) {
   const { exit } = useApp();
+  const { internal_eventEmitter } = useStdin();
 
   // All UX rules (accept, undo, history stash, Ctrl-R) live in the pure
   // handleKey (prompt-state.ts) — here we only hold state + render.
@@ -367,6 +368,27 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
     };
   }, []);
 
+  // Home/End: Ink's useInput recognizes the sequences but drops them (no key
+  // flag, input === ''), so we tap the raw stdin chunk Ink re-emits on its
+  // internal emitter. useInput still fires for the same chunk as a no-op — the
+  // reference-equality guard below keeps it from reverting the cursor move.
+  useEffect(() => {
+    const emitter = internal_eventEmitter;
+    if (!emitter) return;
+    const onRaw = (chunk: unknown) => {
+      const name = homeEndKey(String(chunk));
+      if (name === null) return;
+      setState((prev) => {
+        const outcome = handleKey(prev, { input: '', key: { [name]: true } }, CURSOR_ONLY_CTX);
+        return outcome.kind === 'update' ? outcome.state : prev;
+      });
+    };
+    emitter.on('input', onRaw);
+    return () => {
+      emitter.off('input', onRaw);
+    };
+  }, [internal_eventEmitter]);
+
   const finish = (r: PromptResult) => {
     resultRef.current = r;
     setFinished(true);
@@ -417,7 +439,10 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
       process.stdout.write('\x1B[2J\x1B[H');
       return setState(outcome.state);
     }
-    setState(outcome.state);
+    // Unhandled keys return the same state reference (handleKey's update(state)).
+    // Skipping setState there keeps the Home/End raw listener's cursor move from
+    // being reverted when useInput fires as a no-op for the same chunk.
+    if (outcome.state !== state) setState(outcome.state);
   });
 
   const promptLabel = shortenCwd(cwd, homeDir);
@@ -539,27 +564,70 @@ export function extractPaste(
   ref: { current: { active: boolean; buffer: string } },
 ): string | null {
   if (ref.current.active) {
-    const endIdx = input.indexOf('\x1b[201~');
-    if (endIdx === -1) {
+    const end = findMarker(input, PASTE_END);
+    if (end === null) {
       ref.current.buffer += input;
       return null;
     }
-    const content = ref.current.buffer + input.slice(0, endIdx);
+    const content = ref.current.buffer + input.slice(0, end.start);
     ref.current.active = false;
     ref.current.buffer = '';
     return content;
   }
-  const startIdx = input.indexOf('\x1b[200~');
-  if (startIdx === -1) return null;
-  const afterStart = input.slice(startIdx + 6);
-  const endIdx = afterStart.indexOf('\x1b[201~');
-  if (endIdx === -1) {
+  const start = findMarker(input, PASTE_START);
+  if (start === null) return null;
+  const afterStart = input.slice(start.end);
+  const end = findMarker(afterStart, PASTE_END);
+  if (end === null) {
     ref.current.active = true;
     ref.current.buffer = afterStart;
     return null;
   }
-  return afterStart.slice(0, endIdx);
+  return afterStart.slice(0, end.start);
 }
+
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+
+/**
+ * Locates a bracketed-paste marker, tolerating a missing leading ESC:
+ * Ink's useInput strips one leading ESC from every chunk (parse-keypress +
+ * use-input.js), so a paste that fills a whole chunk arrives as "[200~…"
+ * without its ESC, while markers mid-chunk keep it. Match both forms.
+ */
+export function findMarker(input: string, marker: string): { start: number; end: number } | null {
+  const withEsc = input.indexOf(marker);
+  if (withEsc !== -1) return { start: withEsc, end: withEsc + marker.length };
+  const bare = marker.slice(1); // marker without its leading ESC
+  const bareIdx = input.indexOf(bare);
+  if (bareIdx !== -1) return { start: bareIdx, end: bareIdx + bare.length };
+  return null;
+}
+
+/**
+ * Maps a raw Home/End escape sequence (across common terminal encodings) to a
+ * key name. Ink's useInput recognizes these but does not expose them on its key
+ * object, so app.tsx taps the raw stdin chunk to handle them.
+ */
+export function homeEndKey(sequence: string): 'home' | 'end' | null {
+  switch (sequence) {
+    case '\x1b[H':
+    case '\x1bOH':
+    case '\x1b[1~':
+    case '\x1b[7~':
+      return 'home';
+    case '\x1b[F':
+    case '\x1bOF':
+    case '\x1b[4~':
+    case '\x1b[8~':
+      return 'end';
+    default:
+      return null;
+  }
+}
+
+/** Home/End carry no completion context — a minimal ctx suffices for handleKey. */
+const CURSOR_ONLY_CTX: HandlerContext = { candidates: [], prefix: '', recentUnique: [], searchResults: [] };
 
 /**
  * Splits the typed prefix from the rest of a dropdown candidate for

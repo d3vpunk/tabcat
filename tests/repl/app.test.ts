@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ReplOutput, extractPaste, lineWindow, magicCandidates, magicCommandHints, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { ReplOutput, extractPaste, homeEndKey, lineWindow, magicCandidates, magicCommandHints, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
 import { PromptState, handleKey, initialPromptState } from '../../src/repl/prompt-state.js';
 import { handleReplCommand, isInteractiveTerminal } from '../../src/repl/run.js';
 
@@ -183,6 +183,41 @@ describe('Bracketed paste detection', () => {
     const ref = pasteRef();
     expect(extractPaste('foo\x1b[201~bar', ref)).toBeNull();
     expect(ref.current.active).toBe(false);
+  });
+
+  // Ink's useInput strips the leading ESC from each chunk, so a paste that
+  // fills a whole chunk reaches extractPaste as "[200~…" without its ESC.
+  it('detects a paste whose leading ESC was stripped by Ink', () => {
+    const ref = pasteRef();
+    expect(extractPaste('[200~gh auth login[201~', ref)).toBe('gh auth login');
+    expect(ref.current.active).toBe(false);
+    expect(ref.current.buffer).toBe('');
+  });
+
+  it('detects an ESC-stripped start marker with an ESC-kept end marker', () => {
+    const ref = pasteRef();
+    expect(extractPaste('[200~pasted\x1b[201~', ref)).toBe('pasted');
+    expect(ref.current.active).toBe(false);
+  });
+});
+
+describe('Home/End sequence mapping (homeEndKey)', () => {
+  it('maps the common Home encodings', () => {
+    for (const seq of ['\x1b[H', '\x1bOH', '\x1b[1~', '\x1b[7~']) {
+      expect(homeEndKey(seq)).toBe('home');
+    }
+  });
+
+  it('maps the common End encodings', () => {
+    for (const seq of ['\x1b[F', '\x1bOF', '\x1b[4~', '\x1b[8~']) {
+      expect(homeEndKey(seq)).toBe('end');
+    }
+  });
+
+  it('returns null for anything else', () => {
+    expect(homeEndKey('a')).toBeNull();
+    expect(homeEndKey('\x1b[A')).toBeNull(); // up arrow
+    expect(homeEndKey('')).toBeNull();
   });
 });
 
