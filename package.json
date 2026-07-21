@@ -1,0 +1,36 @@
+{
+  "name": "tabcat",
+  "version": "0.1.0",
+  "description": "Chunk-based, learning shell autocomplete engine (tab-tab-tab)",
+  "type": "module",
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "bin": {
+    "tabcat": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "simulate": "tsx src/cli.ts simulate"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/react": "^18.3.31",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "dependencies": {
+    "ink": "^5.2.1",
+    "proper-lockfile": "^4.1.2",
+    "react": "^18.3.1"
+  }
+}

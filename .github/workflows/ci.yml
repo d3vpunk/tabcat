@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} / Linux
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  package:
+    name: Package / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Pack from clean checkout
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          echo "TABCAT_TARBALL=$RUNNER_TEMP/tabcat-$(node -p "require('./package.json').version").tgz" >> "$GITHUB_ENV"
+      - name: Install and run packaged CLI
+        run: |
+          mkdir "$RUNNER_TEMP/tabcat-consumer"
+          cd "$RUNNER_TEMP/tabcat-consumer"
+          npm init -y
+          npm install "$TABCAT_TARBALL"
+          ./node_modules/.bin/tabcat --version
+      - name: Verify Bash detection
+        if: runner.os == 'Linux'
+        env:
+          SHELL: /bin/bash
+        run: node --input-type=module -e "import('./dist/engine/shell.js').then(({ detectShell }) => { if (detectShell().name !== 'bash') process.exit(1) })"
+      - name: Verify Zsh detection
+        if: runner.os == 'macOS'
+        env:
+          SHELL: /bin/zsh
+        run: node --input-type=module -e "import('./dist/engine/shell.js').then(({ detectShell }) => { if (detectShell().name !== 'zsh') process.exit(1) })"
