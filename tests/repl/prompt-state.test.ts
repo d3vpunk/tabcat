@@ -191,6 +191,23 @@ describe('Prompt state: history navigation', () => {
     expect(up2.line).toBe('make build');
   });
 
+  it('down on an empty line scrolls into the dropdown, and up scrolls back', () => {
+    const candidates = [candidate('git status'), candidate('make build')];
+    const context = ctx({ candidates, recentUnique });
+    const down = press(initialPromptState, key('', { downArrow: true }), context);
+    expect(down.selected).toBe(1);
+    expect(down.historyIndex).toBeNull();
+    expect(down.line).toBe(''); // stays on the empty line, just moves the selection
+
+    // Up while scrolling (selected > 0) walks the list back up, not into history.
+    const up = press(down, key('', { upArrow: true }), context);
+    expect(up.selected).toBe(0);
+    expect(up.historyIndex).toBeNull();
+    // Up again at rest on the empty line: now it goes back into history.
+    const upHistory = press(up, key('', { upArrow: true }), context);
+    expect(upHistory.line).toBe('git status');
+  });
+
   it('a non-empty line without a history match still cycles the dropdown', () => {
     const candidates = [candidate('npm run build'), candidate('npm run test')];
     const context = ctx({ candidates, recentUnique });

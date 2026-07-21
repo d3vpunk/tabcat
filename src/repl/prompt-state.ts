@@ -339,13 +339,13 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
   }
 
   // Up/Down context-dependent:
-  // - Empty line: history navigation, like a standard shell — the last command
-  //   (including a failed one) comes back on the first ↑, even with a frecency
-  //   dropdown showing. Tab still accepts the top dropdown candidate.
+  // - Empty line at rest: ↑ goes back into history (last command, failed ones
+  //   included) like a standard shell; ↓ scrolls into the frecency dropdown so
+  //   the suggestions can be explored. Tab still accepts the top candidate.
   // - Non-empty line, dropdown at rest (selected === 0): ↑ starts a fish-style
-  //   substring search through history. Once you have started scrolling the
-  //   list with ↓ (selected > 0), ↑ scrolls back up the list instead — so the
-  //   list navigates symmetrically and does not hijack into history mid-scroll.
+  //   substring search through history.
+  // - While scrolling the dropdown (selected > 0): ↑/↓ move the selection
+  //   symmetrically and never hijack into history mid-scroll.
   // Esc hides the dropdown -> history gets through.
   if (key.upArrow) {
     // fish-style substring search: non-empty line + dropdown at rest starts the
@@ -365,7 +365,15 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     if (state.historyFilter !== null) {
       return update(navigateSubstring(state, -1, ctx));
     }
-    if (state.line === '' || state.historyIndex !== null || !state.dropdownVisible || ctx.candidates.length === 0) {
+    // History on ↑ when: already paging history, no dropdown to move through, or
+    // an empty line at rest — then ↑ goes back to the last command like a shell.
+    // While scrolling the dropdown (selected > 0) ↑ walks the list back up.
+    if (
+      state.historyIndex !== null ||
+      !state.dropdownVisible ||
+      ctx.candidates.length === 0 ||
+      (state.line === '' && state.selected === 0)
+    ) {
       return update(navigateHistory(state, -1, ctx));
     }
     return update({ ...state, selected: (clampedSelected(state, ctx) - 1 + ctx.candidates.length) % ctx.candidates.length });
@@ -374,7 +382,10 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     if (state.historyFilter !== null) {
       return update(navigateSubstring(state, 1, ctx));
     }
-    if (state.line === '' || state.historyIndex !== null || !state.dropdownVisible || ctx.candidates.length === 0) {
+    // ↓ moves through the dropdown whenever one is visible — including on an
+    // empty line, so the frecency suggestions can be explored. History only when
+    // already paging it or when there is no dropdown to move through.
+    if (state.historyIndex !== null || !state.dropdownVisible || ctx.candidates.length === 0) {
       return update(navigateHistory(state, 1, ctx));
     }
     return update({ ...state, selected: (clampedSelected(state, ctx) + 1) % ctx.candidates.length });
