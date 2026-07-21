@@ -73,7 +73,7 @@ Each command runs in an **isolated shell**. The working directory persists betwe
 **Requirements:** Node.js ≥ 20, and zsh or bash.
 
 ```bash
-git clone <repo-url> tabcat
+git clone https://github.com/d3vpunk/tabcat.git tabcat
 cd tabcat
 npm install
 npm run build
