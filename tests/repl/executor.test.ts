@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { bashShell } from '../../src/engine/shell.js';
+import { bashShell, zshShell } from '../../src/engine/shell.js';
 import { execute, warmShellSnapshot } from '../../src/repl/executor.js';
 import { fuzzySearch } from '../../src/repl/history-search.js';
 
@@ -38,16 +38,48 @@ describe('executor', () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it.skipIf(!hasBash)('snapshot isolates aliases from RC output and global state', async () => {
+  it.skipIf(!hasBash)('snapshot captures aliases and functions, isolated from RC output', async () => {
     const home = mkdtempSync(join(tmpdir(), 'tabcat-bash-home-'));
-    writeFileSync(join(home, '.bashrc'), "echo RC-BANNER\nalias tabcat_test_alias='true'\n", 'utf8');
+    writeFileSync(
+      join(home, '.bashrc'),
+      "echo RC-BANNER\nalias tabcat_test_alias='true'\ntabcat_test_fn(){ return 0; }\n_tabcat_priv(){ return 0; }\n",
+      'utf8',
+    );
 
     try {
       const snapshot = await warmShellSnapshot(bashShell, { ...process.env, HOME: home });
-      expect(snapshot).toContain("alias tabcat_test_alias='true'");
-      expect(snapshot).not.toContain('RC-BANNER');
-      expect(execute('type tabcat_test_alias >/dev/null 2>&1', process.cwd(), bashShell, snapshot ?? '').exitCode).toBe(0);
-      expect(execute('type tabcat_test_alias >/dev/null 2>&1', process.cwd(), bashShell).exitCode).toBe(1);
+      expect(snapshot).not.toBeNull();
+      const dump = readFileSync(snapshot!.file, 'utf8');
+      expect(dump).toContain("alias tabcat_test_alias='true'");
+      expect(dump).toContain('tabcat_test_fn');
+      expect(dump).not.toContain('RC-BANNER'); // rc stdout does not leak into the snapshot
+      expect(dump).not.toContain('_tabcat_priv'); // _* functions filtered out
+
+      // Both an alias-backed and a function-backed command work through execute.
+      expect(execute('type tabcat_test_alias >/dev/null 2>&1', process.cwd(), bashShell, snapshot!.file).exitCode).toBe(0);
+      expect(execute('tabcat_test_fn', process.cwd(), bashShell, snapshot!.file).exitCode).toBe(0);
+      // Without the snapshot the function does not exist.
+      expect(execute('tabcat_test_fn', process.cwd(), bashShell).exitCode).not.toBe(0);
+
+      snapshot!.cleanup();
+      expect(existsSync(snapshot!.file)).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!hasZsh)('zsh snapshot makes a function-backed command runnable (the omz history case)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'tabcat-zsh-home-'));
+    // Mirror oh-my-zsh: an alias that points at a shell function.
+    writeFileSync(join(home, '.zshrc'), "tabcat_fn(){ return 0; }\nalias tabcat_wrapped='tabcat_fn'\n", 'utf8');
+
+    try {
+      const snapshot = await warmShellSnapshot(zshShell, { ...process.env, HOME: home, ZDOTDIR: home });
+      expect(snapshot).not.toBeNull();
+      expect(execute('tabcat_wrapped', process.cwd(), zshShell, snapshot!.file).exitCode).toBe(0);
+      // Without the snapshot the alias -> function chain is gone.
+      expect(execute('tabcat_wrapped', process.cwd(), zshShell).exitCode).not.toBe(0);
+      snapshot!.cleanup();
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

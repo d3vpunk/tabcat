@@ -64,9 +64,18 @@ describe('ShellAdapter', () => {
     expect(bashShell.defaultHistoryPath('/home/u')).toBe('/home/u/.bash_history');
   });
 
-  it('snapshot aliases are reusable as preamble (same output format)', () => {
-    // Both zsh `alias -L` and bash `alias -p` write `alias name='...'`.
-    expect(zshShell.snapshotArgs('/tmp/aliases')).toContain("alias -L > '/tmp/aliases'");
-    expect(bashShell.snapshotArgs('/tmp/aliases')).toContain("alias -p > '/tmp/aliases'");
+  it('snapshot captures aliases and functions as reusable code', () => {
+    // Both zsh `alias -L` and bash `alias -p` write `alias name='...'`; the
+    // function dump (typeset -f / declare -f) makes function-backed commands
+    // work, and completion/internal `_*` functions are filtered out.
+    const zsh = zshShell.snapshotArgs('/tmp/snap').join(' ');
+    expect(zsh).toContain("alias -L > '/tmp/snap'");
+    expect(zsh).toContain('typeset -f');
+    expect(zsh).toContain(':#_*');
+
+    const bash = bashShell.snapshotArgs('/tmp/snap').join(' ');
+    expect(bash).toContain("alias -p > '/tmp/snap'");
+    expect(bash).toContain('declare -f');
+    expect(bash).toContain('_*');
   });
 });

@@ -13,7 +13,7 @@ export interface ShellAdapter {
   readonly name: 'zsh' | 'bash';
   /** Program name for spawn/spawnSync. */
   readonly file: string;
-  /** Interactive invocation: writes aliases as executable commands to a file. */
+  /** Interactive invocation: writes aliases + functions as re-sourceable code to a file. */
   snapshotArgs(outputFile: string): string[];
   /** Non-interactive invocation (no rc files) for the wrapped script. */
   execArgs(script: string): string[];
@@ -29,8 +29,15 @@ export interface ShellAdapter {
 export const zshShell: ShellAdapter = {
   name: 'zsh',
   file: 'zsh',
-  // -L: aliases as `alias name='...'` (machine-readable, reusable).
-  snapshotArgs: (outputFile) => ['-ic', `alias -L > ${quote(outputFile)}`],
+  // Interactive shell so rc aliases + functions exist. `alias -L` dumps
+  // aliases as `alias name='...'`; the loop dumps every non-underscore
+  // function (skip completion/internal `_*` to keep the snapshot lean).
+  // oh-my-zsh wraps commands like `history` in a function (`history=omz_history`)
+  // — without the function bodies the alias breaks with "command not found".
+  snapshotArgs: (outputFile) => {
+    const out = quote(outputFile);
+    return ['-ic', `alias -L > ${out}; for fn in \${(k)functions:#_*}; do typeset -f -- "$fn"; done >> ${out}`];
+  },
   execArgs: (script) => ['-fc', script],
   execPreamble: '',
   defaultHistoryPath: (homeDir) => `${homeDir}/.zsh_history`,
@@ -40,9 +47,13 @@ export const zshShell: ShellAdapter = {
 export const bashShell: ShellAdapter = {
   name: 'bash',
   file: 'bash',
-  // -p: same output format as zsh's `alias -L` — the preamble is
-  // directly executable for both shells.
-  snapshotArgs: (outputFile) => ['-ic', `alias -p > ${quote(outputFile)}`],
+  // `alias -p`: same `alias name='...'` format as zsh's `alias -L`. `declare -f`
+  // dumps function bodies; the loop skips completion/internal `_*` functions so
+  // the snapshot stays lean and function-backed commands keep working.
+  snapshotArgs: (outputFile) => {
+    const out = quote(outputFile);
+    return ['-ic', `alias -p > ${out}; for fn in $(declare -F | awk '{print $3}'); do [[ $fn == _* ]] || declare -f "$fn"; done >> ${out}`];
+  },
   execArgs: (script) => ['-c', script],
   execPreamble: 'shopt -s expand_aliases',
   defaultHistoryPath: (homeDir) => `${homeDir}/.bash_history`,

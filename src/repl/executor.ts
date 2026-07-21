@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ShellAdapter, detectShell } from '../engine/shell.js';
@@ -9,35 +9,49 @@ export interface ExecutionResult {
   exitCode: number;
 }
 
+export interface ShellSnapshot {
+  /** Path to a file with re-sourceable aliases + functions from the login rc. */
+  file: string;
+  /** Removes the snapshot's temp dir. Call once on REPL shutdown. */
+  cleanup: () => void;
+}
+
 /**
- * Loads the alias snapshot asynchronously. The returned promise resolves with
- * the session-specific alias preamble — the REPL waits for the snapshot before
- * the first EXECUTE (not before the first prompt): the race
- * "command runs without aliases because the snapshot is still loading" is gone,
- * without blocking the first prompt. null = no snapshot (no zsh, rc
- * broken, timeout) — the caller should warn.
- * RC output on stdout is ignored; only the explicit alias file is
- * later used as shell code.
+ * Captures the login shell's aliases and functions into a re-sourceable file
+ * asynchronously. The REPL waits for the snapshot before the first EXECUTE (not
+ * before the first prompt): the race "command runs without aliases because the
+ * snapshot is still loading" is gone, without blocking the first prompt.
+ *
+ * The file is kept for the whole session and `source`d per command (rather than
+ * inlined into every exec string — the dump is tens of KB). null = no snapshot
+ * (no shell, rc broken, timeout); the caller should warn. RC output on stdout
+ * is ignored — only the explicit snapshot file is later used as shell code.
  */
 export function warmShellSnapshot(
   shell: ShellAdapter = detectShell(),
   env: NodeJS.ProcessEnv = process.env,
-): Promise<string | null> {
+): Promise<ShellSnapshot | null> {
   return new Promise((resolve) => {
-    const dir = mkdtempSync(join(tmpdir(), 'tabcat-aliases-'));
-    const aliasFile = join(dir, 'aliases');
+    const dir = mkdtempSync(join(tmpdir(), 'tabcat-snapshot-'));
+    const file = join(dir, 'snapshot');
+    const cleanup = () => rmSync(dir, { recursive: true, force: true });
     let settled = false;
-    const finish = (value: string | null) => {
+    const fail = () => {
       if (settled) return;
       settled = true;
-      rmSync(dir, { recursive: true, force: true });
-      resolve(value);
+      cleanup();
+      resolve(null);
+    };
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      resolve({ file, cleanup });
     };
 
     // detached: the interactive shell gets its own session WITHOUT a controlling
     // TTY — otherwise its job control grabs the terminal and the REPL
     // stdin read dies with EIO.
-    const child = spawn(shell.file, shell.snapshotArgs(aliasFile), {
+    const child = spawn(shell.file, shell.snapshotArgs(file), {
       detached: true,
       stdio: 'ignore',
       env,
@@ -45,22 +59,25 @@ export function warmShellSnapshot(
     // A hanging .zshrc must not block the REPL forever.
     const timer = setTimeout(() => {
       child.kill();
-      finish(null);
+      fail();
     }, 15_000);
 
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code !== 0) return finish(null);
+      if (code !== 0) return fail();
+      // The snapshot must at least have been written (may be empty: no aliases
+      // and no functions is legitimate).
       try {
-        finish(readFileSync(aliasFile, 'utf8'));
+        statSync(file);
+        succeed();
       } catch {
-        finish(null);
+        fail();
       }
     });
     child.on('error', () => {
       // Shell not installed? Then we go without aliases.
       clearTimeout(timer);
-      finish(null);
+      fail();
     });
     child.unref();
   });
@@ -68,10 +85,10 @@ export function warmShellSnapshot(
 
 /**
  * Executes the line non-interactively (without rc files); stdio inherit lets
- * interactive tools (vim, ssh) run natively. The user line runs through
- * `eval` so the snapshot aliases take effect (the shell expands aliases
- * at parse time — in the same -c string they would no longer hit the
- * already-parsed line).
+ * interactive tools (vim, ssh) run natively. The snapshot file (aliases +
+ * functions) is `source`d first, then the user line runs through `eval` so the
+ * aliases take effect (the shell expands aliases at parse time — in the same
+ * -c string they would no longer hit the already-parsed line).
  *
  * cwd persistence: the child process writes its $PWD to a temp file at the end.
  * This way combined lines like `cd x && make` also affect the REPL cwd.
@@ -80,14 +97,14 @@ export function execute(
   line: string,
   cwd: string,
   shell: ShellAdapter = detectShell(),
-  aliasPreamble = '',
+  snapshotFile = '',
 ): ExecutionResult {
   const dir = mkdtempSync(join(tmpdir(), 'tabcat-'));
   const pwdFile = join(dir, 'pwd');
 
   const wrapped = [
     shell.execPreamble,
-    aliasPreamble,
+    snapshotFile !== '' ? `source ${quote(snapshotFile)}` : '',
     `eval ${quote(line)}`,
     '__tabcat_rc=$?',
     `pwd > ${quote(pwdFile)}`,

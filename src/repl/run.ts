@@ -5,7 +5,7 @@ import { detectShell } from '../engine/shell.js';
 import { appendHistory, compactHistory, defaultHistoryFile } from '../engine/store.js';
 import { VERSION } from '../version.js';
 import { ReplOutput, promptOnce, showReplHelp, showReplOutput } from './app.js';
-import { execute, warmShellSnapshot } from './executor.js';
+import { ShellSnapshot, execute, warmShellSnapshot } from './executor.js';
 import { realFs } from './real-fs.js';
 import { showMeowAnimation } from './meow.js';
 import { calculateReplStats } from './stats.js';
@@ -98,7 +98,8 @@ export async function runRepl(historyFile: string = defaultHistoryFile()): Promi
   const shell = detectShell();
   const snapshotReady = warmShellSnapshot(shell);
   let snapshotChecked = false;
-  let aliasPreamble = '';
+  let snapshot: ShellSnapshot | null = null;
+  let snapshotFile = '';
   // Compacts when the cap is exceeded — keeps file and startup time small.
   const entries = compactHistory(historyFile, undefined, (count) => {
     console.error(`tabcat: skipped ${count} invalid history line(s) (${historyFile}).`);
@@ -134,19 +135,19 @@ export async function runRepl(historyFile: string = defaultHistoryFile()): Promi
 
     if (!snapshotChecked) {
       snapshotChecked = true;
-      const snapshot = await snapshotReady;
+      snapshot = await snapshotReady;
       if (snapshot === null) {
         console.error(
-          `tabcat: alias snapshot failed (${shell.file}) — aliases are not available in this session.`,
+          `tabcat: alias snapshot failed (${shell.file}) — aliases and functions are not available in this session.`,
         );
       } else {
-        aliasPreamble = snapshot;
+        snapshotFile = snapshot.file;
       }
     }
 
     // cwd attribution: we learn WHERE the line was typed — not where cd led.
     const typedCwd = cwd;
-    const execution = execute(line, cwd, shell, aliasPreamble);
+    const execution = execute(line, cwd, shell, snapshotFile);
     cwd = execution.cwd;
     lastExitCode = execution.exitCode;
 
@@ -171,6 +172,10 @@ export async function runRepl(historyFile: string = defaultHistoryFile()): Promi
     entries.push(entry);
     historyLines.push(line);
   }
+
+  // Session over: drop the snapshot temp file. If the user quit before the
+  // first command, the snapshot may still be loading — await it, then clean up.
+  (snapshot ?? (await snapshotReady))?.cleanup();
 }
 
 export function isInteractiveTerminal(
