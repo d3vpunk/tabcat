@@ -338,11 +338,14 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     return update({ ...state, dropdownVisible: false });
   }
 
-  // Up/Down context-dependent: a visible dropdown with candidates cycles
-  // the selection (even on an empty line — frecency suggestions are useful);
-  // otherwise history navigation. Esc hides the dropdown -> history gets through.
-  // Exception: non-empty line + visible dropdown starts fish-style
-  // substring search through history (↑ older hit, ↓ newer).
+  // Up/Down context-dependent:
+  // - Empty line: history navigation, like a standard shell — the last command
+  //   (including a failed one) comes back on the first ↑, even with a frecency
+  //   dropdown showing. Tab still accepts the top dropdown candidate.
+  // - Non-empty line + visible dropdown: fish-style substring search through
+  //   history (↑ older hit, ↓ newer). Only when the line has no history match
+  //   do ↑/↓ cycle the dropdown selection.
+  // Esc hides the dropdown -> history gets through.
   if (key.upArrow) {
     // fish-style substring search: non-empty line + visible dropdown
     // starts the search. startSubstringSearch returns state unchanged if
@@ -354,7 +357,7 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     if (state.historyFilter !== null) {
       return update(navigateSubstring(state, -1, ctx));
     }
-    if (state.historyIndex !== null || !state.dropdownVisible || ctx.candidates.length === 0) {
+    if (state.line === '' || state.historyIndex !== null || !state.dropdownVisible || ctx.candidates.length === 0) {
       return update(navigateHistory(state, -1, ctx));
     }
     return update({ ...state, selected: (clampedSelected(state, ctx) - 1 + ctx.candidates.length) % ctx.candidates.length });
@@ -363,7 +366,7 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     if (state.historyFilter !== null) {
       return update(navigateSubstring(state, 1, ctx));
     }
-    if (state.historyIndex !== null || !state.dropdownVisible || ctx.candidates.length === 0) {
+    if (state.line === '' || state.historyIndex !== null || !state.dropdownVisible || ctx.candidates.length === 0) {
       return update(navigateHistory(state, 1, ctx));
     }
     return update({ ...state, selected: (clampedSelected(state, ctx) + 1) % ctx.candidates.length });

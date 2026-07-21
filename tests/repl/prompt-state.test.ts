@@ -178,13 +178,28 @@ describe('Prompt state: history navigation', () => {
     expect(up2.line).toBe('make build');
   });
 
-  it('up on an empty line with visible candidates cycles the dropdown', () => {
+  it('up on an empty line navigates history even with visible candidates (shell-like)', () => {
     const candidates = [candidate('git status'), candidate('make build')];
     const context = ctx({ candidates, recentUnique });
     const up = press(initialPromptState, key('', { upArrow: true }), context);
 
+    // The last command comes back on the first ↑, not a dropdown cycle —
+    // a failed command typed just before is reachable like in a real shell.
+    expect(up.line).toBe('git status');
+    expect(up.historyIndex).toBe(0);
+    const up2 = press(up, key('', { upArrow: true }), context);
+    expect(up2.line).toBe('make build');
+  });
+
+  it('a non-empty line without a history match still cycles the dropdown', () => {
+    const candidates = [candidate('npm run build'), candidate('npm run test')];
+    const context = ctx({ candidates, recentUnique });
+    const state: PromptState = { ...initialPromptState, line: 'npm run ', cursor: 8 };
+    const up = press(state, key('', { upArrow: true }), context);
+
     expect(up.selected).toBe(1);
     expect(up.historyIndex).toBeNull();
+    expect(up.historyFilter).toBeNull();
   });
 
   it('WIP line is stashed and restored at the bottom end (#4)', () => {
