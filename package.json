@@ -1,6 +1,6 @@
 {
   "name": "tabcat",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Chunk-based, learning shell autocomplete engine (tab-tab-tab)",
   "type": "module",
   "license": "MIT",
