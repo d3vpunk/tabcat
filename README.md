@@ -73,15 +73,23 @@ Each command runs in an **isolated shell**. The working directory persists betwe
 **Requirements:** Node.js ≥ 20, and zsh or bash.
 
 ```bash
+npm install -g tabcat   # or run without installing: npx tabcat
+
+tabcat import           # seed the model from your zsh/bash history
+tabcat                  # start the smart prompt
+```
+
+<details>
+<summary>From source</summary>
+
+```bash
 git clone https://github.com/d3vpunk/tabcat.git tabcat
 cd tabcat
-npm install
-npm run build
-npm link        # puts the CLI on your PATH
-
-tabcat import   # seed the model from your zsh/bash history
-tabcat          # start the smart prompt
+npm install             # prepare script builds dist automatically
+npm link                # puts the CLI on your PATH
 ```
+
+</details>
 
 Run `tabcat import` once — tabcat parses your existing `~/.zsh_history` or `~/.bash_history` (shell auto-detected via `$SHELL`) and starts with useful suggestions from day one. Re-imports are idempotent.
 
