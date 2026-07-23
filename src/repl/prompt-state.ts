@@ -1,4 +1,5 @@
 import { RankedCandidate } from '../engine/predictor.js';
+import { NameIndex, validateHandle } from '../engine/names.js';
 import { chunkAcceptEnd, nextBoundary, previousBoundary, previousChunkBoundary, previousWordBoundary } from './text-nav.js';
 
 /**
@@ -32,6 +33,12 @@ export interface PromptState {
   lastChangeWasAccept: boolean;
   /** Half-typed line when entering history navigation (zsh stash). */
   wipLine: string;
+  /**
+   * null = not naming; otherwise the handle-in-progress of the Ctrl+N badge
+   * ('' = badge open and empty). The command line freezes while naming —
+   * only the handle is being edited.
+   */
+  naming: string | null;
 }
 
 export const initialPromptState: PromptState = {
@@ -46,6 +53,7 @@ export const initialPromptState: PromptState = {
   searchSelected: 0,
   lastChangeWasAccept: false,
   wipLine: '',
+  naming: null,
 };
 
 /** Abstraction of Ink's key object — only what the handler needs. */
@@ -82,13 +90,23 @@ export interface HandlerContext {
   recentUnique: readonly string[];
   /** Ctrl-R search hits for the current query. */
   searchResults: readonly string[];
+  /** Magic-name index; absent = feature dormant (Ctrl+N no-op, no resolution). */
+  names?: NameIndex;
+  /** Directory the prompt runs in — scopes magic handles. */
+  cwd?: string;
 }
 
 export type KeyOutcome =
   | { kind: 'update'; state: PromptState }
   /** ^L: clear the screen — rendering side effect, hence its own outcome. */
   | { kind: 'clear'; state: PromptState }
-  | { kind: 'submit'; line: string }
+  /**
+   * saveName is only present when the submit came out of the naming badge:
+   * a valid handle = create/overwrite, '' = badge left empty (delete the
+   * handle if the command had one). Absent on every normal submit — and on a
+   * naming submit whose handle was invalid (execute, skip save).
+   */
+  | { kind: 'submit'; line: string; saveName?: string }
   | { kind: 'exit' };
 
 const update = (state: PromptState): KeyOutcome => ({ kind: 'update', state });
@@ -138,6 +156,9 @@ function acceptNextChunk(state: PromptState, ctx: HandlerContext): PromptState {
   const selectedIndex = clampedSelected(state, ctx);
   const candidate = ctx.candidates[selectedIndex];
   if (!candidate || candidate.insert === '') return state;
+  // Magic resolution is all-or-nothing: a partial chunk would splice the
+  // resolved command mid-word — → accepts the whole resolution like Tab.
+  if (candidate.source === 'magic') return acceptSelected(state, ctx);
   const covered = candidate.acceptedPrefixLength ?? ctx.prefix.length;
   const partial = candidate.display.slice(0, chunkAcceptEnd(candidate.display, covered));
   if (partial.length <= covered) return state;
@@ -251,8 +272,42 @@ const anchorAfterAccept = (state: PromptState): PromptState =>
     ? { ...state, undoStack: [...state.undoStack, state.line], lastChangeWasAccept: false }
     : state;
 
+/** Handles in use, minus the one already owned by this line (renaming to itself is not a collision). */
+function existingHandles(state: PromptState, ctx: HandlerContext): string[] {
+  const own = ctx.names?.handleFor(state.line.trim(), ctx.cwd ?? '') ?? null;
+  return (ctx.names?.handles() ?? []).filter((handle) => handle !== own);
+}
+
 export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerContext): KeyOutcome {
   const { input, key } = event;
+
+  // --- Naming badge (Ctrl+N) — the command line is frozen, only the handle
+  // is edited. Dropdown navigation, history and Ctrl-R are disabled here. ---
+  if (state.naming !== null) {
+    if (key.escape || (key.ctrl && input === 'c')) {
+      return update({ ...state, naming: null });
+    }
+    if (key.return) {
+      // Enter never blocks: a valid handle saves, an empty badge signals
+      // delete-if-named, anything invalid just executes without saving
+      // (the badge already showed red beforehand).
+      if (state.naming === '') return { kind: 'submit', line: state.line, saveName: '' };
+      const valid = validateHandle(state.naming, state.line, existingHandles(state, ctx));
+      return valid !== null
+        ? { kind: 'submit', line: state.line, saveName: valid }
+        : { kind: 'submit', line: state.line };
+    }
+    if (key.ctrl && input === 'u') return update({ ...state, naming: '' });
+    if (key.backspace || key.delete) return update({ ...state, naming: state.naming.slice(0, -1) });
+    if (input && !key.ctrl && !key.meta) {
+      // Live filter: only a-z / 0-9 enter the badge (letters lowercased),
+      // everything else is swallowed — the badge always holds a form-valid
+      // handle-in-progress. Length is capped at 16.
+      const filtered = input.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return update({ ...state, naming: (state.naming + filtered).slice(0, 16) });
+    }
+    return update(state);
+  }
 
   // --- Ctrl-R search mode ---
   if (state.searchQuery !== null) {
@@ -286,6 +341,15 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
 
   if (key.ctrl && input === 'r') {
     return update({ ...state, searchQuery: '', searchSelected: 0, historyFilter: null, historyIndex: null });
+  }
+  if (key.ctrl && input === 'n') {
+    // Name this command. Only for real, non-empty commands (':help' etc. are
+    // not executable) and only with an index wired up (feature toggle).
+    // A command that already has a handle gets it prefilled for edit/overwrite.
+    if (ctx.names === undefined || state.line.trim() === '' || state.line.trimStart().startsWith(':')) {
+      return update(state);
+    }
+    return update({ ...state, naming: ctx.names.handleFor(state.line.trim(), ctx.cwd ?? '') ?? '' });
   }
   if (key.ctrl && input === 'c') {
     return update({ ...withLine(state, '', 0), undoStack: [], lastChangeWasAccept: false });
@@ -329,7 +393,11 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     if (state.dropdownVisible && selectedIndex > 0 && candidate && candidate.insert !== '') {
       return update(acceptSelected(state, ctx));
     }
-    return { kind: 'submit', line: state.line };
+    // Exact magic handle = one-step fast path: Enter submits the resolved
+    // command directly. Only a whole-line exact match resolves — a handle
+    // with arguments appended is not a handle anymore.
+    const resolved = ctx.names?.resolve(state.line.trim(), ctx.cwd ?? '') ?? null;
+    return { kind: 'submit', line: resolved ?? state.line };
   }
 
   if (key.tab && key.shift) return update(undoLastAccept(state));

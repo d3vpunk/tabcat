@@ -2,6 +2,7 @@ import { Chunk, lex } from './lexer.js';
 import { BEGIN, ChunkModel, DEFAULT_SCORING, END, HistoryEntry, ScoringConfig } from './model.js';
 import { DEFAULT_MERGE, MergeConfig, mergeForward } from './merge.js';
 import { completePathToken, FsLike } from './fs-completer.js';
+import type { NameIndex } from './names.js';
 
 export interface RankedCandidate {
   /** What Tab/selection inserts into the line (merged, without already-typed text). */
@@ -13,7 +14,9 @@ export interface RankedCandidate {
    */
   display: string;
   score: number;
-  source: 'history' | 'fs' | 'both';
+  source: 'history' | 'fs' | 'both' | 'magic';
+  /** Set for magic candidates: the user-assigned handle that resolves to `display`. */
+  magicName?: string;
   /** Position in display after represented input prefix; differs when escaping adds characters. */
   acceptedPrefixLength?: number;
   /** Raw input length replaced on accept; differs for quoted or escaped path prefixes. */
@@ -60,7 +63,7 @@ export class Predictor {
 
   constructor(
     entries: readonly HistoryEntry[],
-    private readonly opts: { now: () => number; fs?: FsLike; homeDir?: string },
+    private readonly opts: { now: () => number; fs?: FsLike; homeDir?: string; names?: NameIndex },
     private readonly config: PredictorConfig = DEFAULT_PREDICTOR,
   ) {
     this.model = new ChunkModel(config.scoring);
@@ -168,6 +171,17 @@ export class Predictor {
             : {}),
         };
       });
+
+    // Magic handles only compete on the first token: the handle stands in for
+    // a whole command, so mid-line it can never be what the user means. They
+    // rank above every frecency candidate — the user asked for them by name.
+    const magic =
+      this.opts.names !== undefined && context.length === 1 && prefix !== ''
+        ? this.opts.names.match(prefix, input.cwd)
+        : [];
+    if (magic.length > 0) {
+      return { candidates: [...magic, ...candidates].slice(0, this.config.topN), prefix };
+    }
 
     return { candidates, prefix };
   }

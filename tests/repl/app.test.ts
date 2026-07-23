@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ReplOutput, extractPaste, homeEndKey, lineWindow, magicCandidates, magicCommandHints, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { ReplOutput, acceptedLineFor, extractPaste, homeEndKey, lineWindow, magicCandidates, magicCommandHints, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
 import { PromptState, handleKey, initialPromptState } from '../../src/repl/prompt-state.js';
 import { handleReplCommand, isInteractiveTerminal } from '../../src/repl/run.js';
 
@@ -73,6 +73,39 @@ describe('REPL commands', () => {
     expect(handleReplCommand(':meow', context)).toBe('meow');
   });
 
+  it(':names lists handles, active-in-this-directory first', () => {
+    const output: ReplOutput[] = [];
+    const names = [
+      { name: 'elsewhere', line: 'cmd-a', cwds: ['/other'], ts: 3 },
+      { name: 'here', line: 'cmd-b', cwds: ['/work'], ts: 1 },
+      { name: 'everywhere', line: 'cmd-c', cwds: [], ts: 2 },
+    ];
+
+    expect(handleReplCommand(':names', { ...context, names, showOutput: (value) => output.push(value) })).toBe('handled');
+    expect(output[0]).toEqual({
+      kind: 'names',
+      names: [
+        { name: 'everywhere', line: 'cmd-c', active: true },
+        { name: 'here', line: 'cmd-b', active: true },
+        { name: 'elsewhere', line: 'cmd-a', active: false },
+      ],
+    });
+  });
+
+  it(':names without an index shows an empty list', () => {
+    const output: ReplOutput[] = [];
+    expect(handleReplCommand(':names', { ...context, showOutput: (value) => output.push(value) })).toBe('handled');
+    expect(output[0]).toEqual({ kind: 'names', names: [] });
+  });
+
+  it('acceptedLineFor previews the replace-prefix accept (discovery badge)', () => {
+    const candidate = { display: 'git status', insert: ' status', score: 1, source: 'history' as const };
+    expect(acceptedLineFor('git', 3, candidate, 3)).toBe('git status');
+
+    const replacing = { ...candidate, replacePrefixLength: 2 };
+    expect(acceptedLineFor('gi', 2, replacing, 2)).toBe('git status');
+  });
+
   it('passes unknown magic commands through to the shell', () => {
     expect(handleReplCommand(':unknown', context)).toBe('unhandled');
     expect(handleReplCommand('/usr/bin/env', context)).toBe('unhandled');
@@ -134,7 +167,7 @@ describe('Stats text layout', () => {
 describe('Magic command hints', () => {
   it('shows all commands after a colon', () => {
     expect(magicCommandHints(':')?.map(({ command }) => command)).toEqual([
-      ':help', ':history', ':stats', ':version', ':cwd', ':clear', ':meow', ':exit',
+      ':help', ':history', ':names', ':stats', ':version', ':cwd', ':clear', ':meow', ':exit',
     ]);
   });
 

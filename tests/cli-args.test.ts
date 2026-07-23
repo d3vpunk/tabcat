@@ -11,11 +11,17 @@ describe('CLI arguments', () => {
     expect(parseCliArgs(['--history', '/tmp/h'])).toMatchObject({ command: 'repl', history: '/tmp/h' });
   });
 
+  it('accepts the names command with an optional history path', () => {
+    expect(parseCliArgs(['names'])).toMatchObject({ command: 'names' });
+    expect(parseCliArgs(['names', '--history', '/tmp/h'])).toMatchObject({ command: 'names', history: '/tmp/h' });
+  });
+
   it.each([
     [['simulate', '--now', 'nope'], 'Invalid value for --now'],
     [['stats', '--history'], 'Missing value for --history'],
     [['stats', '--wat'], 'Unknown option: --wat'],
     [['stats', '--line', 'x'], '--line is not valid for stats'],
+    [['names', '--line', 'x'], '--line is not valid for names'],
   ])('rejects invalid arguments: %j', (argv, message) => {
     expect(() => parseCliArgs(argv)).toThrow(message);
     try {

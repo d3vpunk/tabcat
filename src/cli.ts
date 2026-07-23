@@ -5,6 +5,7 @@ import { CliArgumentError, commandUsage, parseCliArgs } from './cli-args.js';
 import { HistoryEntry } from './engine/model.js';
 import { Predictor } from './engine/predictor.js';
 import { detectShell } from './engine/shell.js';
+import { namesFileFor, readNames } from './engine/names-store.js';
 import { MAX_HISTORY_ENTRIES, appendHistory, dedupeImportEntries, defaultHistoryFile, readHistory } from './engine/store.js';
 import { realFs } from './repl/real-fs.js';
 import { runRepl } from './repl/run.js';
@@ -24,6 +25,7 @@ Commands:
   import          Seed from shell history (zsh/bash, detected via $SHELL) [--file <path>]
   simulate        Show ranking for a line: --line <str> [--cwd <dir>] [--now <ms>]
   stats           History overview (entries, directories)
+  names           List magic names (Ctrl-N shortcuts from the REPL)
   help            This help
 
 Options:
@@ -42,8 +44,8 @@ try {
 } catch (error) {
   if (!(error instanceof CliArgumentError)) throw error;
   console.error(`tabcat: ${error.message}`);
-  const commandHint = process.argv.slice(2).find((token) => ['repl', 'import', 'simulate', 'stats'].includes(token));
-  console.error(commandUsage(error.command ?? (commandHint as 'repl' | 'import' | 'simulate' | 'stats' | undefined) ?? 'help'));
+  const commandHint = process.argv.slice(2).find((token) => ['repl', 'import', 'simulate', 'stats', 'names'].includes(token));
+  console.error(commandUsage(error.command ?? (commandHint as 'repl' | 'import' | 'simulate' | 'stats' | 'names' | undefined) ?? 'help'));
   process.exit(2);
 }
 
@@ -113,6 +115,18 @@ switch (args.command) {
       if (entry.cwd !== null) byCwd.set(entry.cwd, (byCwd.get(entry.cwd) ?? 0) + 1);
     }
     console.log(`${entries.length} entries, ${byCwd.size} directories (${historyFile})`);
+    break;
+  }
+
+  case 'names': {
+    const historyFile = args.history ?? defaultHistoryFile();
+    const names = readNames(namesFileFor(historyFile));
+    if (names.length === 0) {
+      console.log('No magic names yet — press Ctrl-N on a typed command in the REPL to create one.');
+      break;
+    }
+    const width = Math.max(...names.map((name) => name.name.length));
+    for (const name of names) console.log(`${name.name.padEnd(width)}  ${name.line}`);
     break;
   }
 
