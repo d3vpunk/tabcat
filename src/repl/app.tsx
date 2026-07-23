@@ -34,7 +34,8 @@ export function trackCompletion(
   const { key } = event;
   const attempted = Boolean(
     (key.tab && !key.shift) ||
-    (key.rightArrow && state.cursor === state.line.length && candidates[selectedIndex]?.insert),
+    (key.rightArrow && state.cursor === state.line.length && candidates[selectedIndex]?.insert) ||
+    (key.return && state.dropdownVisible && selectedIndex > 0 && candidates[selectedIndex]?.insert),
   );
   const accepted = attempted && outcome.kind === 'update' && outcome.state.line !== state.line;
   const undone = Boolean(key.tab && key.shift && outcome.kind === 'update' && outcome.state.line !== state.line);
@@ -542,7 +543,9 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
       <Text dimColor>
         {searchQuery !== null
           ? '🐱 ↑/↓: select · enter: accept · esc: back'
-          : '🐱 tab: all · →: chunk · ⇧tab: undo · ^⌫: delete chunk · alt/option+⌫: fast · ^r: search'}
+          : dropdownVisible && magicHints === null && selectedIndex > 0 && candidates.length > 0
+            ? '🐱 enter/tab: accept · ↑/↓: select · →: chunk · esc: close'
+            : '🐱 tab: all · →: chunk · ⇧tab: undo · ^⌫: delete chunk · alt/option+⌫: fast · ^r: search'}
       </Text>
     </Box>
   );

@@ -167,6 +167,46 @@ describe('Prompt state: accept & undo', () => {
   });
 });
 
+describe('Prompt state: enter on a navigated selection', () => {
+  const context = ctx({
+    candidates: [candidate('git status', ' status'), candidate('git commit', ' commit')],
+    prefix: 'git',
+  });
+
+  it('enter at selected 0 submits the typed line unchanged', () => {
+    const state: PromptState = { ...initialPromptState, line: 'git', cursor: 3, selected: 0 };
+    expect(handleKey(state, key('', { return: true }), context)).toEqual({ kind: 'submit', line: 'git' });
+  });
+
+  it('enter on a navigated candidate accepts it instead of submitting (#1)', () => {
+    const state: PromptState = { ...initialPromptState, line: 'git', cursor: 3, selected: 1 };
+    const accepted = press(state, key('', { return: true }), context);
+
+    expect(accepted.line).toBe('git commit');
+    expect(accepted.selected).toBe(0); // reset -> a second enter submits
+    expect(accepted.undoStack).toEqual(['git']);
+  });
+
+  it('two-stage: a second enter after the accept submits the completed line', () => {
+    const state: PromptState = { ...initialPromptState, line: 'git', cursor: 3, selected: 1 };
+    const accepted = press(state, key('', { return: true }), context);
+    expect(handleKey(accepted, key('', { return: true }), context)).toEqual({ kind: 'submit', line: 'git commit' });
+  });
+
+  it('enter submits when the dropdown is hidden even if a selection lingers', () => {
+    const state: PromptState = { ...initialPromptState, line: 'git', cursor: 3, selected: 1, dropdownVisible: false };
+    expect(handleKey(state, key('', { return: true }), context)).toEqual({ kind: 'submit', line: 'git' });
+  });
+
+  it('enter submits when the navigated candidate is already fully typed (insert "")', () => {
+    // Guard: a selected candidate whose insert is '' has nothing to accept — Tab
+    // would cycle it, so Enter must fall through to submit rather than dead-key.
+    const guarded = ctx({ candidates: [candidate('git status', ' status'), candidate('git', '')], prefix: 'git' });
+    const state: PromptState = { ...initialPromptState, line: 'git', cursor: 3, selected: 1 };
+    expect(handleKey(state, key('', { return: true }), guarded)).toEqual({ kind: 'submit', line: 'git' });
+  });
+});
+
 describe('Prompt state: history navigation', () => {
   const recentUnique = ['git status', 'make build']; // newest first
 

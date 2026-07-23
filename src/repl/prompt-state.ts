@@ -317,7 +317,20 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
   }
   if (key.ctrl && input === 'l') return { kind: 'clear', state };
 
-  if (key.return) return { kind: 'submit', line: state.line };
+  if (key.return) {
+    // Enter on a deliberately navigated dropdown selection accepts that
+    // candidate instead of submitting the half-typed line. selected > 0 is
+    // only reachable via ↑/↓ in the dropdown with nothing typed since (withLine
+    // resets selected to 0 on every edit), so this never hijacks a normal
+    // type→Enter. Two-stage by design: acceptSelected fills the line and resets
+    // selected, so a second Enter submits the completed command.
+    const selectedIndex = clampedSelected(state, ctx);
+    const candidate = ctx.candidates[selectedIndex];
+    if (state.dropdownVisible && selectedIndex > 0 && candidate && candidate.insert !== '') {
+      return update(acceptSelected(state, ctx));
+    }
+    return { kind: 'submit', line: state.line };
+  }
 
   if (key.tab && key.shift) return update(undoLastAccept(state));
   if (key.tab) return update(acceptSelected(state, ctx));

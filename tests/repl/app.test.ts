@@ -105,6 +105,22 @@ describe('Completion telemetry', () => {
     const undone = trackCompletion(missed, acceptedState, { input: '', key: { tab: true, shift: true } }, { kind: 'update', state }, candidates, 0);
     expect(undone).toEqual({ attempts: 1, accepts: 0, top1Accepts: 0, acceptedChars: 0, undos: 1 });
   });
+
+  it('counts enter-accept on a navigated selection (not top-1)', () => {
+    const two = [
+      { display: 'git status', insert: ' status', score: 2, source: 'history' as const },
+      { display: 'git commit', insert: ' commit', score: 1, source: 'history' as const },
+    ];
+    const navigated: PromptState = { ...state, selected: 1 };
+    const next = { ...navigated, line: 'git commit', cursor: 10, selected: 0 };
+    expect(trackCompletion(empty, navigated, { input: '', key: { return: true } }, { kind: 'update', state: next }, two, 1)).toEqual({
+      attempts: 1, accepts: 1, top1Accepts: 0, acceptedChars: 7, undos: 0,
+    });
+  });
+
+  it('does not count a plain enter submit at selected 0 as an attempt', () => {
+    expect(trackCompletion(empty, state, { input: '', key: { return: true } }, { kind: 'submit', line: 'git' }, candidates, 0)).toEqual(empty);
+  });
 });
 
 describe('Stats text layout', () => {
