@@ -119,6 +119,15 @@ describe('names: NameIndex', () => {
     const index = new NameIndex([name()]);
     expect(index.match('PHP', CWD)).toHaveLength(1);
   });
+
+  it('insert stays non-empty when the handle is longer than the command', () => {
+    // 'ls -la' named 'listall': typing 6+ chars of the handle must still be
+    // Tab-acceptable — an empty insert would read as "nothing to accept".
+    const index = new NameIndex([name({ name: 'listall', line: 'ls -la' })]);
+    const [match] = index.match('listal', CWD);
+    expect(match?.insert).not.toBe('');
+    expect(match?.display).toBe('ls -la');
+  });
 });
 
 describe('names: predictor integration', () => {

@@ -123,7 +123,10 @@ export class NameIndex {
       .sort((a, b) => a.name.length - b.name.length || b.ts - a.ts)
       .map((name, index) => ({
         display: name.line,
-        insert: name.line.slice(prefix.length),
+        // insert gates the accept machinery ('' = dead key/cycle) — it must
+        // stay non-empty as long as accepting would change the line, even
+        // when the handle is longer than the command it expands to.
+        insert: name.line === prefix ? '' : name.line.slice(prefix.length) || name.line,
         score: MAGIC_SCORE - index,
         source: 'magic' as const,
         magicName: name.name,
