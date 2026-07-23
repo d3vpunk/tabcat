@@ -1,4 +1,4 @@
-export type CliCommand = 'repl' | 'import' | 'simulate' | 'stats' | 'help' | 'version';
+export type CliCommand = 'repl' | 'import' | 'simulate' | 'stats' | 'names' | 'help' | 'version';
 type DataCommand = Exclude<CliCommand, 'help' | 'version'>;
 
 export interface CliArgs {
@@ -11,13 +11,14 @@ export interface CliArgs {
   commandHelp: boolean;
 }
 
-const COMMANDS = new Set<CliCommand>(['repl', 'import', 'simulate', 'stats', 'help']);
+const COMMANDS = new Set<CliCommand>(['repl', 'import', 'simulate', 'stats', 'names', 'help']);
 const VALUE_OPTIONS = new Set(['history', 'file', 'line', 'cwd', 'now']);
 const ALLOWED_OPTIONS: Record<DataCommand, ReadonlySet<string>> = {
   repl: new Set(['history']),
   import: new Set(['history', 'file']),
   simulate: new Set(['history', 'line', 'cwd', 'now']),
   stats: new Set(['history']),
+  names: new Set(['history']),
 };
 
 export class CliArgumentError extends Error {
@@ -116,6 +117,8 @@ export function commandUsage(command: CliCommand): string {
       return 'Usage: tabcat simulate [--line <text>] [--cwd <dir>] [--now <ms>] [--history <path>]';
     case 'stats':
       return 'Usage: tabcat stats [--history <path>]';
+    case 'names':
+      return 'Usage: tabcat names [--history <path>]';
     case 'help':
       return 'Usage: tabcat help';
     case 'version':

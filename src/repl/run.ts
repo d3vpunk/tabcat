@@ -1,5 +1,7 @@
 import { homedir } from 'node:os';
 import { HistoryEntry } from '../engine/model.js';
+import { MagicName, NameIndex } from '../engine/names.js';
+import { appendName, namesFileFor, readNames } from '../engine/names-store.js';
 import { Predictor } from '../engine/predictor.js';
 import { detectShell } from '../engine/shell.js';
 import { appendHistory, compactHistory, defaultHistoryFile } from '../engine/store.js';
@@ -14,6 +16,7 @@ export interface ReplCommandContext {
   cwd: string;
   historyFile: string;
   entries: readonly HistoryEntry[];
+  names?: readonly MagicName[];
   showHelp?: () => void;
   showOutput?: (output: ReplOutput) => void;
   clear?: () => void;
@@ -46,6 +49,17 @@ export function handleReplCommand(line: string, context: ReplCommandContext): Re
         kind: 'stats',
         stats: calculateReplStats(context.entries),
         historyFile: context.historyFile,
+      });
+      return 'handled';
+    }
+    case 'names': {
+      // Read-only listing — creation and deletion live in the Ctrl+N badge.
+      const all = context.names ?? [];
+      const isActive = (name: MagicName): boolean => name.cwds.length === 0 || name.cwds.includes(context.cwd);
+      const sorted = [...all].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.ts - a.ts);
+      showOutput({
+        kind: 'names',
+        names: sorted.map((name) => ({ name: name.name, line: name.line, active: isActive(name) })),
       });
       return 'handled';
     }
@@ -112,20 +126,37 @@ export async function runRepl(historyFile: string = defaultHistoryFile()): Promi
     );
   }
   const homeDir = homedir();
-  const predictor = new Predictor(entries, { now: () => Date.now(), fs: realFs, homeDir });
+  // Magic names: on by default, TABCAT_MAGIC_NAMES=0 makes the whole layer
+  // dormant (empty index, predictor unchanged, Ctrl+N no-op).
+  const magicEnabled = process.env['TABCAT_MAGIC_NAMES'] !== '0';
+  const namesFile = namesFileFor(historyFile);
+  const nameIndex = new NameIndex(magicEnabled ? readNames(namesFile) : []);
+  const predictor = new Predictor(entries, {
+    now: () => Date.now(),
+    fs: realFs,
+    homeDir,
+    ...(magicEnabled ? { names: nameIndex } : {}),
+  });
   const historyLines = entries.map((e) => e.line);
   let cwd = process.cwd();
   let lastExitCode: number | undefined;
   let historyWritable = true;
 
   for (;;) {
-    const result = await promptOnce({ predictor, cwd, homeDir, historyLines, lastExitCode });
+    const result = await promptOnce({
+      predictor,
+      cwd,
+      homeDir,
+      historyLines,
+      lastExitCode,
+      ...(magicEnabled ? { names: nameIndex } : {}),
+    });
     if (result.type === 'exit') break;
 
     const line = result.line.trim();
     if (line === '') continue;
     if (line === 'exit') break;
-    const replCommand = handleReplCommand(line, { cwd, historyFile, entries });
+    const replCommand = handleReplCommand(line, { cwd, historyFile, entries, names: nameIndex.all() });
     if (replCommand === 'exit') break;
     if (replCommand === 'meow') {
       await showMeowAnimation();
@@ -142,6 +173,23 @@ export async function runRepl(historyFile: string = defaultHistoryFile()): Promi
         );
       } else {
         snapshotFile = snapshot.file;
+      }
+    }
+
+    // Naming badge outcome: create/delete BEFORE executing — saving is
+    // independent of the command's exit code (a failed command keeps its name).
+    if (magicEnabled && result.saveName !== undefined) {
+      if (result.saveName === '') {
+        // Empty badge on a previously named command = delete (tombstone);
+        // on an unnamed one it is just the escape hatch — nothing to do.
+        if (nameIndex.has(line)) {
+          nameIndex.remove(line);
+          appendName(namesFile, { name: '', line, cwds: [], ts: Date.now() });
+        }
+      } else {
+        const magicName: MagicName = { name: result.saveName, line, cwds: [cwd], ts: Date.now() };
+        nameIndex.add(magicName);
+        appendName(namesFile, magicName);
       }
     }
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MagicName, NameIndex } from '../../src/engine/names.js';
 import { RankedCandidate } from '../../src/engine/predictor.js';
 import {
   HandlerContext,
@@ -519,5 +520,141 @@ describe('Prompt state: Ctrl-R search', () => {
 
     expect(picked.undoStack).toEqual([]);
     expect(undone.line).toBe('git status');
+  });
+});
+
+describe('Prompt state: magic names (Ctrl+N badge)', () => {
+  const CWD = '/home/dev/project';
+  const LONG = 'docker compose run php vendor/bin/phpstan analyze src';
+
+  const names = (existing: MagicName[] = []): NameIndex => new NameIndex(existing);
+
+  const magicCtx = (index: NameIndex, overrides: Partial<HandlerContext> = {}): HandlerContext =>
+    ctx({ names: index, cwd: CWD, ...overrides });
+
+  const typedState = (line: string, naming: string | null = null): PromptState => ({
+    ...initialPromptState,
+    line,
+    cursor: line.length,
+    naming,
+  });
+
+  it('Ctrl+N opens an empty badge on a typed command', () => {
+    const state = press(typedState(LONG), key('n', { ctrl: true }), magicCtx(names()));
+    expect(state.naming).toBe('');
+    expect(state.line).toBe(LONG);
+  });
+
+  it('Ctrl+N is a no-op on empty lines, :commands, and without an index', () => {
+    expect(press(typedState(''), key('n', { ctrl: true }), magicCtx(names())).naming).toBeNull();
+    expect(press(typedState(':help'), key('n', { ctrl: true }), magicCtx(names())).naming).toBeNull();
+    expect(press(typedState(LONG), key('n', { ctrl: true }), ctx()).naming).toBeNull();
+  });
+
+  it('Ctrl+N in search mode does not open the badge', () => {
+    const searching: PromptState = { ...typedState(LONG), searchQuery: 'git' };
+    const state = press(searching, key('n', { ctrl: true }), magicCtx(names()));
+    expect(state.naming).toBeNull();
+  });
+
+  it('Ctrl+N prefills the existing handle of a named command', () => {
+    const index = names([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
+    const state = press(typedState(LONG), key('n', { ctrl: true }), magicCtx(index));
+    expect(state.naming).toBe('phpstananalyze');
+  });
+
+  it('badge input is live-filtered: lowercased, alphanumeric only, capped at 16', () => {
+    let state = typedState(LONG, '');
+    state = press(state, key('P'), magicCtx(names()));
+    state = press(state, key('h'), magicCtx(names()));
+    state = press(state, key('-'), magicCtx(names()));
+    state = press(state, key(' '), magicCtx(names()));
+    state = press(state, key('9'), magicCtx(names()));
+    expect(state.naming).toBe('ph9');
+    expect(state.line).toBe(LONG); // command line frozen
+
+    const long = press(typedState(LONG, 'a'.repeat(16)), key('x'), magicCtx(names()));
+    expect(long.naming).toBe('a'.repeat(16));
+  });
+
+  it('backspace edits and Ctrl+U clears the badge', () => {
+    expect(press(typedState(LONG, 'abc'), key('', { backspace: true }), magicCtx(names())).naming).toBe('ab');
+    expect(press(typedState(LONG, 'abc'), key('u', { ctrl: true }), magicCtx(names())).naming).toBe('');
+  });
+
+  it('dropdown/history keys are swallowed while naming', () => {
+    const context = magicCtx(names(), { candidates: [candidate('x')], recentUnique: ['ls'] });
+    for (const event of [key('', { upArrow: true }), key('', { downArrow: true }), key('r', { ctrl: true }), key('', { tab: true })]) {
+      const state = press(typedState(LONG, 'abc'), event, context);
+      expect(state.naming).toBe('abc');
+      expect(state.line).toBe(LONG);
+    }
+  });
+
+  it('Esc cancels naming without executing', () => {
+    const outcome = handleKey(typedState(LONG, 'abc'), key('', { escape: true }), magicCtx(names()));
+    expect(outcome).toMatchObject({ kind: 'update', state: { naming: null, line: LONG } });
+  });
+
+  it('Enter with a valid handle submits with saveName', () => {
+    const outcome = handleKey(typedState(LONG, 'phpstananalyze'), key('', { return: true }), magicCtx(names()));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: 'phpstananalyze' });
+  });
+
+  it('Enter with an empty badge submits with saveName "" (delete-if-named)', () => {
+    const outcome = handleKey(typedState(LONG, ''), key('', { return: true }), magicCtx(names()));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: '' });
+  });
+
+  it('Enter with an invalid handle executes but skips the save', () => {
+    for (const bad of ['ab', 'docker']) {
+      const outcome = handleKey(typedState(LONG, bad), key('', { return: true }), magicCtx(names()));
+      expect(outcome).toEqual({ kind: 'submit', line: LONG });
+    }
+  });
+
+  it('Enter with a colliding handle skips the save', () => {
+    const index = names([{ name: 'deploy', line: 'other cmd', cwds: [CWD], ts: 1 }]);
+    const outcome = handleKey(typedState(LONG, 'deploy'), key('', { return: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG });
+  });
+
+  it('re-saving the own handle of a command is not a collision', () => {
+    const index = names([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
+    const outcome = handleKey(typedState(LONG, 'phpstananalyze'), key('', { return: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: 'phpstananalyze' });
+  });
+
+  it('exact handle + Enter submits the resolved command', () => {
+    const index = names([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
+    const outcome = handleKey(typedState('phpstananalyze'), key('', { return: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG });
+  });
+
+  it('handle in a different cwd does not resolve', () => {
+    const index = names([{ name: 'phpstananalyze', line: LONG, cwds: ['/somewhere/else'], ts: 1 }]);
+    const outcome = handleKey(typedState('phpstananalyze'), key('', { return: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'submit', line: 'phpstananalyze' });
+  });
+
+  it('a partial handle does not resolve on Enter', () => {
+    const index = names([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
+    const outcome = handleKey(typedState('phpstan'), key('', { return: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'submit', line: 'phpstan' });
+  });
+
+  it('Tab accepts the whole magic resolution (replaces the typed handle)', () => {
+    const index = names([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
+    const context = magicCtx(index, { candidates: index.match('phps', CWD), prefix: 'phps' });
+    const state = press(typedState('phps'), key('', { tab: true }), context);
+    expect(state.line).toBe(LONG);
+    expect(state.cursor).toBe(LONG.length);
+  });
+
+  it('→ chunk-accept on a magic candidate accepts the whole resolution', () => {
+    const index = names([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
+    const context = magicCtx(index, { candidates: index.match('phps', CWD), prefix: 'phps' });
+    const state = press(typedState('phps'), key('', { rightArrow: true }), context);
+    expect(state.line).toBe(LONG);
   });
 });

@@ -59,6 +59,7 @@ tabcat ships an Ink-based smart prompt with ghost text and a scrolling dropdown:
 | `Shift+Tab` | Undo the last accept |
 | `↑` / `↓` | Empty line: history (substring-filtered once you typed); otherwise: move in the dropdown |
 | `Ctrl+R` | Fuzzy history search |
+| `Ctrl+N` | Name this command (magic name) |
 | `Ctrl+Backspace` | Delete one chunk · `Alt+Backspace` deletes fast |
 | `Ctrl+A/E/U/W/K/L` | Familiar readline shortcuts |
 | `Esc` | Close the dropdown |
@@ -67,6 +68,22 @@ tabcat ships an Ink-based smart prompt with ghost text and a scrolling dropdown:
 Half-typed lines are stashed when you browse history and restored when you come back — like zsh.
 
 Each command runs in an **isolated shell**. The working directory persists between commands (including `cd x && make`); exported variables, shell functions, options and aliases defined *during* the session apply only to that one command. Aliases from your shell's startup config are imported once at launch.
+
+## Magic names
+
+Long, hard-to-read commands get a short handle you assign yourself — no AI, no config file, just `Ctrl+N` on a typed command:
+
+```text
+~/proj ❯ docker compose -f qlico/compose.yaml run php vendor/bin/phpstan analyze src
+         ✨ phpstananalyze▏    a-z 0-9 · enter: save+run · esc: cancel
+```
+
+- **Create:** type the command, press `Ctrl+N`, type a handle (3–16 chars, `a-z 0-9`), Enter saves it *and* runs the command. Esc cancels without executing. Enter never blocks: an invalid or colliding handle just runs the command without saving.
+- **Use:** type the handle as the first word — it appears as the top suggestion with its resolution; `Tab` expands it (append args as usual). Typing the *exact* handle and pressing Enter runs the resolved command in one step. History always records the full command, never the handle.
+- **Discover:** when you type (or complete to) a command that already has a handle here, a ` ✨ handle ` badge shows it — that's how you learn your own shortcuts.
+- **Scope:** a handle is bound to the directory it was created in and never surfaces elsewhere (relative paths stay safe).
+- **Edit/delete:** `Ctrl+N` on a named command prefills the handle; clear it and press Enter to delete.
+- `:names` lists your handles in the REPL, `tabcat names` on the CLI. Set `TABCAT_MAGIC_NAMES=0` to turn the feature off.
 
 ## Getting started
 
@@ -101,6 +118,7 @@ Run `tabcat import` once — tabcat parses your existing `~/.zsh_history` or `~/
 | `tabcat import [--file <path>]` | Seed the model from shell history |
 | `tabcat simulate --line 'git ch' [--cwd <dir>] [--now <ms>]` | Show the ranking and what Tab would insert — explore and calibrate the algorithm without the UI |
 | `tabcat stats` | History overview (entries, directories) |
+| `tabcat names` | List magic names (`Ctrl+N` shortcuts from the REPL) |
 | `tabcat --history <path>` | Use an alternative history file (default: `~/.config/tabcat/history.jsonl`) |
 
 ## Tuning the algorithm
@@ -132,12 +150,14 @@ src/
     fs-completer.ts  # path completion (injectable FS)
     shell.ts         # zsh/bash adapters: alias snapshot, exec, history import
     store.ts         # append-only JSONL history, locking, compaction
+    names.ts         # magic names: handle validation + in-memory index
+    names-store.ts   # append-only names.jsonl with tombstone deletes
   repl/              # Ink UI
     app.tsx          # rendering: prompt, dropdown, ghost text
     prompt-state.ts  # all UX logic as a pure, testable state machine
     executor.ts      # isolated shell execution with cwd persistence
     run.ts           # loop: prompt → execute → learn → prompt
-  cli.ts             # repl / import / simulate / stats
+  cli.ts             # repl / import / simulate / stats / names
 ```
 
 ## Development

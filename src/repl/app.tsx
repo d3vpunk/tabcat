@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useStdin } from 'ink';
 import { Predictor, RankedCandidate } from '../engine/predictor.js';
 import { CompletionTelemetry } from '../engine/model.js';
+import { HandleIssue, NameIndex, handleIssue } from '../engine/names.js';
 import { fuzzySearch } from './history-search.js';
 import { nextBoundary } from './text-nav.js';
 import { HandlerContext, KeyEvent, KeyOutcome, PromptState, handleKey, initialPromptState } from './prompt-state.js';
@@ -9,7 +10,15 @@ import { ReplStats } from './stats.js';
 
 const DROPDOWN_ROWS = 5;
 
-export type PromptResult = { type: 'submit'; line: string; completion: CompletionTelemetry } | { type: 'exit' };
+export type PromptResult =
+  | {
+      type: 'submit';
+      line: string;
+      completion: CompletionTelemetry;
+      /** Only set when the naming badge committed: handle = save, '' = delete-if-named. */
+      saveName?: string;
+    }
+  | { type: 'exit' };
 
 export interface PromptOptions {
   predictor: Predictor;
@@ -19,6 +28,8 @@ export interface PromptOptions {
   historyLines: readonly string[];
   /** Exit code of the last command (undefined = session start). 0 = cyan, ≠0 = red. */
   lastExitCode?: number | undefined;
+  /** Magic-name index; absent = feature dormant (no badge, no resolution). */
+  names?: NameIndex | undefined;
 }
 
 type CompletionCounters = Omit<CompletionTelemetry, 'durationMs'>;
@@ -51,6 +62,7 @@ export function trackCompletion(
 const HELP_COMMANDS = [
   [':help', 'This help'],
   [':history', 'Last 10 commands'],
+  [':names', 'Learned magic names'],
   [':stats', 'History overview'],
   [':version', 'tabcat version'],
   [':cwd', 'Working directory'],
@@ -93,6 +105,7 @@ const HELP_KEYS = [
   ['→', 'Accept next chunk'],
   ['↑ / ↓', 'Navigate history or suggestions'],
   ['Ctrl-R', 'Search history'],
+  ['Ctrl-N', 'Name this command'],
   ['Esc', 'Close suggestions'],
   ['Ctrl-C', 'Clear current input'],
   ['Ctrl-D', 'Quit tabcat'],
@@ -127,6 +140,7 @@ export function showReplHelp(): void {
 
 export type ReplOutput =
   | { kind: 'history'; entries: readonly { number: number; line: string }[] }
+  | { kind: 'names'; names: readonly { name: string; line: string; active: boolean }[] }
   | { kind: 'stats'; stats: ReplStats; historyFile: string }
   | { kind: 'version'; version: string }
   | { kind: 'cwd'; cwd: string };
@@ -146,6 +160,28 @@ export function ReplOutputPanel({ output }: { output: ReplOutput }) {
           ))}
         </MagicPanel>
       );
+    case 'names': {
+      const nameWidth = Math.min(18, Math.max(6, ...output.names.map((n) => n.name.length)) + 2);
+      return (
+        <MagicPanel title="names" {...(output.names.length > 0 ? { subtitle: `${output.names.length} learned` } : {})}>
+          {output.names.length === 0 ? (
+            <Text dimColor>No magic names yet — Ctrl-N on a typed command creates one.</Text>
+          ) : (
+            output.names.map((entry) => (
+              <Box key={`${entry.name}${entry.line}`}>
+                <Box width={nameWidth}>
+                  {entry.active ? <Text color="magenta" bold>{entry.name}</Text> : <Text dimColor>{entry.name}</Text>}
+                </Box>
+                <Text dimColor={!entry.active}>{truncateEnd(singleLine(entry.line), contentWidth - nameWidth - 2)}</Text>
+              </Box>
+            ))
+          )}
+          {output.names.some((entry) => !entry.active) && (
+            <Text dimColor>dimmed: belong to other directories</Text>
+          )}
+        </MagicPanel>
+      );
+    }
     case 'stats':
       return (
         <MagicPanel title="stats" subtitle={periodLabel(output.stats)}>
@@ -293,7 +329,7 @@ interface AppProps extends PromptOptions {
   onDone: (result: PromptResult) => void;
 }
 
-function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone }: AppProps) {
+function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onDone }: AppProps) {
   const { exit } = useApp();
   const { internal_eventEmitter } = useStdin();
 
@@ -310,7 +346,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
     undos: 0,
   });
 
-  const { line, cursor, selected, dropdownVisible, historyIndex, historyFilter, searchQuery, searchSelected } = state;
+  const { line, cursor, selected, dropdownVisible, historyFilter, searchQuery, searchSelected, naming } = state;
 
   const prediction = useMemo(
     () => predictor.predict({ line, cursor, cwd }),
@@ -411,6 +447,8 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
           prefix: prediction.prefix,
           recentUnique: effectiveHistory,
           searchResults,
+          cwd,
+          ...(names ? { names } : {}),
         });
         if (outcome.kind === 'update') setState(outcome.state);
       }
@@ -423,6 +461,8 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
       prefix: prediction.prefix,
       recentUnique: effectiveHistory,
       searchResults,
+      cwd,
+      ...(names ? { names } : {}),
     };
     const event = { input, key };
     const outcome = handleKey(state, event, ctx);
@@ -432,6 +472,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
         type: 'submit',
         line: outcome.line,
         completion: { ...completion.current, durationMs: Date.now() - startedAt.current },
+        ...(outcome.saveName !== undefined ? { saveName: outcome.saveName } : {}),
       });
     }
     if (outcome.kind === 'exit') return finish({ type: 'exit' });
@@ -452,11 +493,26 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
   const lineAvail = Math.max(20, (process.stdout.columns ?? 80) - promptWidth);
   const win = lineWindow(line, cursor, lineAvail);
   const magicHints = magicCommandHints(line);
+  // No inline ghost for magic candidates: the handle is not a textual prefix
+  // of the command — the dropdown row shows the resolution instead.
   const ghost =
-    !finished && magicHints === null && dropdownVisible && cursor === line.length
+    !finished && naming === null && magicHints === null && dropdownVisible && cursor === line.length &&
+    candidates[selectedIndex]?.source !== 'magic'
       ? (candidates[selectedIndex]?.insert ?? '')
       : '';
   const visibleGhost = ghost.slice(0, Math.max(0, win.ghostRemain));
+
+  // Live badge validation: red only for real conflicts ('taken' / program
+  // name) — "too short" stays quiet while typing and only skips the save.
+  const ownHandle = names ? names.handleFor(line.trim(), cwd) : null;
+  const namingIssue: HandleIssue | null =
+    naming !== null && naming !== '' && names
+      ? handleIssue(naming, line, names.handles().filter((handle) => handle !== ownHandle))
+      : null;
+  // Discovery badge: the typed line (or the line as it would be if the top
+  // suggestion were accepted — computed per dropdown row) already has a handle
+  // here. This is the loop: discover via badge → next time type the handle.
+  const discoveryHandle = !finished && naming === null && names ? names.handleFor(line.trim(), cwd) : null;
 
   if (finished) {
     return (
@@ -471,13 +527,30 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
     <Box flexDirection="column">
       <Box>
         <Text color={promptColor}>{promptLabel} ❯ </Text>
-        <Text>{win.before}</Text>
-        <Text inverse>{win.at || (visibleGhost ? visibleGhost.slice(0, nextBoundary(visibleGhost, 0)) : ' ')}</Text>
-        <Text>{win.after}</Text>
-        <Text dimColor>{cursor === line.length ? visibleGhost.slice(nextBoundary(visibleGhost, 0)) : ''}</Text>
+        {naming !== null ? (
+          // Frozen while naming — only the badge below is being edited.
+          <Text>{line.length > lineAvail ? `${line.slice(0, lineAvail - 1)}…` : line}</Text>
+        ) : (
+          <>
+            <Text>{win.before}</Text>
+            <Text inverse>{win.at || (visibleGhost ? visibleGhost.slice(0, nextBoundary(visibleGhost, 0)) : ' ')}</Text>
+            <Text>{win.after}</Text>
+            <Text dimColor>{cursor === line.length ? visibleGhost.slice(nextBoundary(visibleGhost, 0)) : ''}</Text>
+          </>
+        )}
       </Box>
 
-      {searchQuery !== null ? (
+      {naming !== null ? (
+        <Box>
+          <Text>{' '.repeat(promptWidth)}</Text>
+          <Text backgroundColor={namingIssue !== null ? 'red' : 'blue'} color="whiteBright" bold>
+            {` ✨ ${naming}▏ `}
+          </Text>
+          <Text dimColor>
+            {`  a-z 0-9 · enter: save+run · esc: cancel${namingIssue === 'taken' ? ' · taken' : namingIssue === 'command' ? ' · = command name' : ''}`}
+          </Text>
+        </Box>
+      ) : searchQuery !== null ? (
         <Box
           flexDirection="column"
           marginLeft={1}
@@ -520,13 +593,34 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
             {visibleCandidates.map((candidate, i) => {
               const candidateIndex = dropdownStart + i;
               const isSelected = candidateIndex === selectedIndex;
+              if (candidate.source === 'magic') {
+                // Handle in magenta, resolved command dim — the row itself IS
+                // the resolution preview (no ghost for magic candidates).
+                return (
+                  <Text key={candidate.display + candidateIndex} {...(isSelected ? { color: 'cyan' } : {})}>
+                    {isSelected ? '› ' : '  '}
+                    <Text color="magenta" bold>✨ {candidate.magicName}</Text>
+                    <Text dimColor>  {candidate.display}</Text>
+                  </Text>
+                );
+              }
               const { matched, rest } = splitMatched(
                 candidate.display,
                 candidate.acceptedPrefixLength ?? prediction.prefix.length,
               );
+              // Discovery: accepting this suggestion would land on a command
+              // that already has a handle here — teach it inline.
+              const discovered =
+                isSelected && names && cursor === line.length
+                  ? names.handleFor(acceptedLineFor(line, cursor, candidate, prediction.prefix.length).trim(), cwd)
+                  : null;
               return (
                 <Text key={candidate.display + candidateIndex} {...(isSelected ? { color: 'cyan' } : {})}>
                   {isSelected ? '› ' : '  '}
+                  {discovered !== null && (
+                    <Text backgroundColor="blue" color="whiteBright" bold>{` ✨ ${discovered} `}</Text>
+                  )}
+                  {discovered !== null && ' '}
                   {matched && <Text dimColor>{matched}</Text>}
                   {rest}
                   <Text dimColor> {sourceMarker(candidate.source)}</Text>
@@ -540,15 +634,34 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, onDone
         )
       )}
 
-      <Text dimColor>
-        {searchQuery !== null
-          ? '🐱 ↑/↓: select · enter: accept · esc: back'
-          : dropdownVisible && magicHints === null && selectedIndex > 0 && candidates.length > 0
-            ? '🐱 enter/tab: accept · ↑/↓: select · →: chunk · esc: close'
-            : '🐱 tab: all · →: chunk · ⇧tab: undo · ^⌫: delete chunk · alt/option+⌫: fast · ^r: search'}
-      </Text>
+      {naming === null && (
+        <Box>
+          {discoveryHandle !== null && (
+            <Text backgroundColor="blue" color="whiteBright" bold>{` ✨ ${discoveryHandle} `}</Text>
+          )}
+          {discoveryHandle !== null && <Text> </Text>}
+          <Text dimColor>
+            {searchQuery !== null
+              ? '🐱 ↑/↓: select · enter: accept · esc: back'
+              : dropdownVisible && magicHints === null && selectedIndex > 0 && candidates.length > 0
+                ? '🐱 enter/tab: accept · ↑/↓: select · →: chunk · esc: close'
+                : '🐱 tab: all · →: chunk · ⇧tab: undo · ^⌫: delete chunk · alt/option+⌫: fast · ^r: search'}
+          </Text>
+        </Box>
+      )}
     </Box>
   );
+}
+
+/** The line as it would read after accepting `candidate` (replace-prefix semantics of acceptSelected). */
+export function acceptedLineFor(
+  line: string,
+  cursor: number,
+  candidate: RankedCandidate,
+  prefixLength: number,
+): string {
+  const replaceFrom = cursor - (candidate.replacePrefixLength ?? prefixLength);
+  return line.slice(0, replaceFrom) + candidate.display + line.slice(cursor);
 }
 
 const sourceMarker = (source: RankedCandidate['source']): string =>
