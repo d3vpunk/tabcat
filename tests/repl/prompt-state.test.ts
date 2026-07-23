@@ -5,6 +5,7 @@ import {
   HandlerContext,
   KeyEvent,
   PromptState,
+  enterPasteMode,
   handleKey,
   initialPromptState,
 } from '../../src/repl/prompt-state.js';
@@ -656,5 +657,143 @@ describe('Prompt state: magic names (Ctrl+N badge)', () => {
     const context = magicCtx(index, { candidates: index.match('phps', CWD), prefix: 'phps' });
     const state = press(typedState('phps'), key('', { rightArrow: true }), context);
     expect(state.line).toBe(LONG);
+  });
+});
+
+describe('Prompt state: forget magic name (Ctrl+X)', () => {
+  const CWD = '/home/dev/project';
+  const LONG = 'docker compose run php vendor/bin/phpstan analyze src';
+
+  const named = (): NameIndex => new NameIndex([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
+
+  const typedState = (line: string, overrides: Partial<PromptState> = {}): PromptState => ({
+    ...initialPromptState,
+    line,
+    cursor: line.length,
+    ...overrides,
+  });
+
+  it('Ctrl+X on a selected magic candidate forgets its command line', () => {
+    const index = named();
+    const context = ctx({ names: index, cwd: CWD, candidates: index.match('phps', CWD), prefix: 'phps' });
+    const outcome = handleKey(typedState('phps'), key('x', { ctrl: true }), context);
+    expect(outcome).toMatchObject({ kind: 'forget', line: LONG });
+  });
+
+  it('Ctrl+X keeps the typed line and resets the selection', () => {
+    const index = named();
+    const context = ctx({ names: index, cwd: CWD, candidates: index.match('phps', CWD), prefix: 'phps' });
+    const outcome = handleKey(typedState('phps', { selected: 1 }), key('x', { ctrl: true }), context);
+    if (outcome.kind !== 'forget') throw new Error(`unexpected outcome: ${outcome.kind}`);
+    expect(outcome.state.line).toBe('phps');
+    expect(outcome.state.selected).toBe(0);
+  });
+
+  it('Ctrl+X on an exactly typed named command forgets it (discovery badge)', () => {
+    const outcome = handleKey(typedState(LONG), key('x', { ctrl: true }), ctx({ names: named(), cwd: CWD }));
+    expect(outcome).toMatchObject({ kind: 'forget', line: LONG });
+  });
+
+  it('Ctrl+X prefers the selected magic candidate over the typed line', () => {
+    const index = new NameIndex([
+      { name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 },
+      { name: 'phps', line: 'echo other', cwds: [CWD], ts: 2 },
+    ]);
+    const context = ctx({ names: index, cwd: CWD, candidates: index.match('phps', CWD), prefix: 'phps' });
+    const outcome = handleKey(typedState('phps'), key('x', { ctrl: true }), context);
+    // 'phps' is itself a handle (typed exactly) AND matches candidates —
+    // the visible dropdown selection wins.
+    if (outcome.kind !== 'forget') throw new Error(`unexpected outcome: ${outcome.kind}`);
+    expect(outcome.line).toBe('echo other');
+  });
+
+  it('Ctrl+X is a no-op without an index, on unnamed lines, and on non-magic candidates', () => {
+    expect(handleKey(typedState(LONG), key('x', { ctrl: true }), ctx()).kind).toBe('update');
+    expect(handleKey(typedState('ls'), key('x', { ctrl: true }), ctx({ names: named(), cwd: CWD })).kind).toBe('update');
+    const historyContext = ctx({ names: named(), cwd: CWD, candidates: [candidate('git status')], prefix: 'git' });
+    expect(handleKey(typedState('git'), key('x', { ctrl: true }), historyContext).kind).toBe('update');
+  });
+
+  it('Ctrl+X with a hidden dropdown falls back to the typed line only', () => {
+    const index = named();
+    const context = ctx({ names: index, cwd: CWD, candidates: index.match('phps', CWD), prefix: 'phps' });
+    const outcome = handleKey(typedState('phps', { dropdownVisible: false }), key('x', { ctrl: true }), context);
+    expect(outcome.kind).toBe('update'); // 'phps' itself is not a named line
+  });
+
+  it('Ctrl+X while naming or searching is swallowed', () => {
+    const namingState = typedState(LONG, { naming: 'abc' });
+    const namingOutcome = handleKey(namingState, key('x', { ctrl: true }), ctx({ names: named(), cwd: CWD }));
+    expect(namingOutcome).toMatchObject({ kind: 'update', state: { naming: 'abc' } });
+
+    const searchState = typedState(LONG, { searchQuery: 'git' });
+    const searchOutcome = handleKey(searchState, key('x', { ctrl: true }), ctx({ names: named(), cwd: CWD }));
+    expect(searchOutcome).toMatchObject({ kind: 'update', state: { searchQuery: 'git' } });
+  });
+});
+
+describe('Prompt state: multiline paste mode', () => {
+  const BLOCK = "curl 'http://api.local/users' \\\n  -X 'OPTIONS' \\\n  -H 'Accept: */*'";
+
+  const pastedState = (block: string = BLOCK): PromptState => enterPasteMode(initialPromptState, block);
+
+  it('enterPasteMode stores the block verbatim (continuations intact)', () => {
+    const state = pastedState();
+    expect(state.pasted).toBe(BLOCK);
+    expect(state.line).toBe(''); // editor line untouched
+  });
+
+  it('enterPasteMode wraps the block into the typed line at the cursor', () => {
+    const typed: PromptState = { ...initialPromptState, line: 'sudo ', cursor: 5 };
+    const state = enterPasteMode(typed, 'ls\npwd');
+    expect(state.pasted).toBe('sudo ls\npwd');
+  });
+
+  it('enterPasteMode normalizes CRLF, strips control chars and trailing whitespace', () => {
+    const state = enterPasteMode(initialPromptState, 'echo a\r\necho\u0007\tb\n\n  ');
+    expect(state.pasted).toBe('echo a\necho\tb'); // tab survives, BEL and trailing blank lines do not
+  });
+
+  it('enterPasteMode cancels naming and search', () => {
+    const busy: PromptState = { ...initialPromptState, naming: 'abc', searchQuery: 'git', historyFilter: 'g' };
+    const state = enterPasteMode(busy, 'a\nb');
+    expect(state).toMatchObject({ pasted: 'a\nb', naming: null, searchQuery: null, historyFilter: null });
+  });
+
+  it('an effectively empty paste does not enter paste mode', () => {
+    expect(enterPasteMode(initialPromptState, ' \n \n')).toBe(initialPromptState);
+  });
+
+  it('Enter submits the block verbatim', () => {
+    const outcome = handleKey(pastedState(), key('', { return: true }), ctx());
+    expect(outcome).toEqual({ kind: 'submit', line: BLOCK });
+  });
+
+  it('Esc and Ctrl+C discard the block and keep the typed line', () => {
+    const typed: PromptState = { ...initialPromptState, line: 'sudo ', cursor: 5 };
+    const state = enterPasteMode(typed, 'ls\npwd');
+    for (const event of [key('', { escape: true }), key('c', { ctrl: true })]) {
+      const outcome = handleKey(state, event, ctx());
+      expect(outcome).toMatchObject({ kind: 'update', state: { pasted: null, line: 'sudo ' } });
+    }
+  });
+
+  it('completion, history, and typing keys are swallowed in paste mode', () => {
+    const context = ctx({ candidates: [candidate('git status')], recentUnique: ['ls'] });
+    const events = [
+      key('', { tab: true }),
+      key('', { upArrow: true }),
+      key('', { downArrow: true }),
+      key('r', { ctrl: true }),
+      key('n', { ctrl: true }),
+      key('x'),
+      key('', { backspace: true }),
+    ];
+    for (const event of events) {
+      const outcome = handleKey(pastedState(), event, context);
+      if (outcome.kind !== 'update') throw new Error(`unexpected outcome: ${outcome.kind}`);
+      expect(outcome.state.pasted).toBe(BLOCK);
+      expect(outcome.state.line).toBe('');
+    }
   });
 });

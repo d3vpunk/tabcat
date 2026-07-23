@@ -39,6 +39,13 @@ export interface PromptState {
    * only the handle is being edited.
    */
   naming: string | null;
+  /**
+   * null = no multiline paste pending; otherwise the pasted block, verbatim.
+   * The whole completion machinery is bypassed — Enter runs the block exactly
+   * as pasted (shell semantics stay intact: continuations, quoting, one
+   * command per line), Esc discards it.
+   */
+  pasted: string | null;
 }
 
 export const initialPromptState: PromptState = {
@@ -54,7 +61,24 @@ export const initialPromptState: PromptState = {
   lastChangeWasAccept: false,
   wipLine: '',
   naming: null,
+  pasted: null,
 };
+
+/**
+ * Enters paste mode for a multiline block: CRLF normalized, control characters
+ * (except newline and tab) dropped, trailing whitespace stripped. Anything the
+ * user had typed wraps around the block at the cursor — `sudo ` + paste works.
+ * Transient modes (naming, search, history filter) are cancelled.
+ */
+export function enterPasteMode(state: PromptState, paste: string): PromptState {
+  const block = (
+    state.line.slice(0, state.cursor) +
+    paste.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\uFFFD]/g, '') +
+    state.line.slice(state.cursor)
+  ).replace(/\s+$/, '');
+  if (block === '') return state;
+  return { ...state, pasted: block, naming: null, searchQuery: null, historyFilter: null, historyIndex: null };
+}
 
 /** Abstraction of Ink's key object — only what the handler needs. */
 export interface KeyEvent {
@@ -107,6 +131,12 @@ export type KeyOutcome =
    * naming submit whose handle was invalid (execute, skip save).
    */
   | { kind: 'submit'; line: string; saveName?: string }
+  /**
+   * ^X on a surfaced magic name: delete the handle of `line` without
+   * executing anything — the prompt stays open. Persistence (tombstone)
+   * happens outside; `state` continues the prompt with the selection reset.
+   */
+  | { kind: 'forget'; line: string; state: PromptState }
   | { kind: 'exit' };
 
 const update = (state: PromptState): KeyOutcome => ({ kind: 'update', state });
@@ -281,6 +311,15 @@ function existingHandles(state: PromptState, ctx: HandlerContext): string[] {
 export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerContext): KeyOutcome {
   const { input, key } = event;
 
+  // --- Paste mode — a multiline block is pending, completion is bypassed.
+  // Enter runs it verbatim, Esc/Ctrl-C discards it (the typed line survives),
+  // everything else is swallowed: the block is not editable by design. ---
+  if (state.pasted !== null) {
+    if (key.return) return { kind: 'submit', line: state.pasted };
+    if (key.escape || (key.ctrl && input === 'c')) return update({ ...state, pasted: null });
+    return update(state);
+  }
+
   // --- Naming badge (Ctrl+N) — the command line is frozen, only the handle
   // is edited. Dropdown navigation, history and Ctrl-R are disabled here. ---
   if (state.naming !== null) {
@@ -350,6 +389,21 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
       return update(state);
     }
     return update({ ...state, naming: ctx.names.handleFor(state.line.trim(), ctx.cwd ?? '') ?? '' });
+  }
+  if (key.ctrl && input === 'x') {
+    // Forget a magic name right where it gets in the way: the selected ⚡
+    // candidate in the dropdown, or the typed line's own handle (discovery
+    // badge). Nothing executes — the prompt keeps the typed line.
+    if (ctx.names === undefined) return update(state);
+    const candidate = ctx.candidates[clampedSelected(state, ctx)];
+    const target =
+      state.dropdownVisible && candidate?.source === 'magic'
+        ? candidate.display
+        : ctx.names.handleFor(state.line.trim(), ctx.cwd ?? '') !== null
+          ? state.line.trim()
+          : null;
+    if (target === null) return update(state);
+    return { kind: 'forget', line: target, state: { ...state, selected: 0 } };
   }
   if (key.ctrl && input === 'c') {
     return update({ ...withLine(state, '', 0), undoStack: [], lastChangeWasAccept: false });

@@ -104,6 +104,17 @@ export function warmShellSnapshot(
  * are written to a temp file and loaded into the exec shell so `history`/`fc`
  * reflect the session — the one-shot shell has no event list of its own.
  */
+/**
+ * Collapses a history entry to one physical line for the exec shell's seed
+ * file: a multiline command (paste mode) would otherwise split into bogus
+ * history events. Continuation backslashes join into the same command,
+ * remaining real newlines separate commands — `;` keeps the collapsed line
+ * valid shell if it is ever recalled via `!!`/`fc`.
+ */
+export function seedLine(entry: string): string {
+  return entry.replace(/\s*\\\n\s*/g, ' ').replace(/\s*\n\s*/g, '; ');
+}
+
 export function execute(
   line: string,
   cwd: string,
@@ -116,7 +127,7 @@ export function execute(
 
   let historyLoad = '';
   if (history.length > 0) {
-    const seed = history.slice(-SEED_HISTORY_ENTRIES);
+    const seed = history.slice(-SEED_HISTORY_ENTRIES).map(seedLine);
     const histFile = join(dir, 'history');
     // 0600: the file holds command history — same sensitivity as the store.
     writeFileSync(histFile, `${seed.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });

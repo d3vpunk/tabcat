@@ -131,7 +131,11 @@ export async function runRepl(historyFile: string = defaultHistoryFile()): Promi
   const magicEnabled = process.env['TABCAT_MAGIC_NAMES'] !== '0';
   const namesFile = namesFileFor(historyFile);
   const nameIndex = new NameIndex(magicEnabled ? readNames(namesFile) : []);
-  const predictor = new Predictor(entries, {
+  // Multiline entries (verbatim paste-mode submits) never feed prediction:
+  // the single-line dropdown/ghost cannot render them and a collapsed variant
+  // would corrupt `\`-continued commands. They stay in the history file and
+  // the exec-shell seed only.
+  const predictor = new Predictor(entries.filter((entry) => !entry.line.includes('\n')), {
     now: () => Date.now(),
     fs: realFs,
     homeDir,
@@ -149,7 +153,18 @@ export async function runRepl(historyFile: string = defaultHistoryFile()): Promi
       homeDir,
       historyLines,
       lastExitCode,
-      ...(magicEnabled ? { names: nameIndex } : {}),
+      ...(magicEnabled
+        ? {
+            names: nameIndex,
+            // ^X inside the prompt: same tombstone semantics as an emptied
+            // naming badge, but without executing anything.
+            onForget: (forgotten: string) => {
+              if (!nameIndex.has(forgotten)) return;
+              nameIndex.remove(forgotten);
+              appendName(namesFile, { name: '', line: forgotten, cwds: [], ts: Date.now() });
+            },
+          }
+        : {}),
     });
     if (result.type === 'exit') break;
 

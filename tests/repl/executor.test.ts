@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { bashShell, zshShell } from '../../src/engine/shell.js';
-import { execute, warmShellSnapshot } from '../../src/repl/executor.js';
+import { execute, seedLine, warmShellSnapshot } from '../../src/repl/executor.js';
 import { fuzzySearch } from '../../src/repl/history-search.js';
 
 // Skip shell-dependent tests when the shell is missing on the machine
@@ -98,6 +98,21 @@ describe('executor', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe('history seed collapsing (seedLine)', () => {
+  it('joins backslash continuations into one command', () => {
+    expect(seedLine("curl 'x' \\\n  -X 'OPTIONS' \\\n  -H 'a: b'")).toBe("curl 'x' -X 'OPTIONS' -H 'a: b'");
+  });
+
+  it('separates real newlines with ; so the collapsed line stays valid shell', () => {
+    expect(seedLine('echo 1\necho 2')).toBe('echo 1; echo 2');
+    expect(seedLine('cd x \\\n  && make\nls -la')).toBe('cd x && make; ls -la');
+  });
+
+  it('leaves single-line entries untouched', () => {
+    expect(seedLine('git status')).toBe('git status');
   });
 });
 

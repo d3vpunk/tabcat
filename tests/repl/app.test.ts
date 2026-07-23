@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ReplOutput, acceptedLineFor, extractPaste, homeEndKey, lineWindow, magicCandidates, magicCommandHints, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { ReplOutput, acceptedLineFor, extractPaste, homeEndKey, isMultilinePaste, lineWindow, magicCandidates, magicCommandHints, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
 import { PromptState, handleKey, initialPromptState } from '../../src/repl/prompt-state.js';
 import { handleReplCommand, isInteractiveTerminal } from '../../src/repl/run.js';
 
@@ -273,6 +273,20 @@ describe('Block input sanitizing (sanitizeInsert)', () => {
   it('leaves plain text, spaces and emoji untouched', () => {
     expect(sanitizeInsert('git status ')).toBe('git status ');
     expect(sanitizeInsert('echo "😀 fïn"')).toBe('echo "😀 fïn"');
+  });
+});
+
+describe('Multiline paste detection (isMultilinePaste)', () => {
+  it('a single command with a trailing newline stays inline', () => {
+    expect(isMultilinePaste('git status\n')).toBe(false);
+    expect(isMultilinePaste('git status\r\n  ')).toBe(false);
+    expect(isMultilinePaste('git status')).toBe(false);
+  });
+
+  it('interior newlines make it a block', () => {
+    expect(isMultilinePaste("curl 'x' \\\n  -X 'OPTIONS'\n")).toBe(true);
+    expect(isMultilinePaste('ls\npwd')).toBe(true);
+    expect(isMultilinePaste('a\r\nb')).toBe(true);
   });
 });
 

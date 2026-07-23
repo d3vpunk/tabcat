@@ -5,10 +5,12 @@ import { CompletionTelemetry } from '../engine/model.js';
 import { HandleIssue, NameIndex, handleIssue } from '../engine/names.js';
 import { fuzzySearch } from './history-search.js';
 import { nextBoundary } from './text-nav.js';
-import { HandlerContext, KeyEvent, KeyOutcome, PromptState, handleKey, initialPromptState } from './prompt-state.js';
+import { HandlerContext, KeyEvent, KeyOutcome, PromptState, enterPasteMode, handleKey, initialPromptState } from './prompt-state.js';
 import { ReplStats } from './stats.js';
 
 const DROPDOWN_ROWS = 5;
+/** Paste-mode preview cap — enough for a typical multiline curl, no flooding. */
+const PASTE_ROWS = 10;
 
 export type PromptResult =
   | {
@@ -30,6 +32,12 @@ export interface PromptOptions {
   lastExitCode?: number | undefined;
   /** Magic-name index; absent = feature dormant (no badge, no resolution). */
   names?: NameIndex | undefined;
+  /**
+   * ^X on a surfaced magic name: persist the deletion (tombstone + index
+   * removal). Called while the prompt stays open — the candidate list
+   * refreshes in place.
+   */
+  onForget?: ((line: string) => void) | undefined;
 }
 
 type CompletionCounters = Omit<CompletionTelemetry, 'durationMs'>;
@@ -106,6 +114,7 @@ const HELP_KEYS = [
   ['↑ / ↓', 'Navigate history or suggestions'],
   ['Ctrl-R', 'Search history'],
   ['Ctrl-N', 'Name this command'],
+  ['Ctrl-X', 'Forget shown magic name'],
   ['Esc', 'Close suggestions'],
   ['Ctrl-C', 'Clear current input'],
   ['Ctrl-D', 'Quit tabcat'],
@@ -329,7 +338,7 @@ interface AppProps extends PromptOptions {
   onDone: (result: PromptResult) => void;
 }
 
-function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onDone }: AppProps) {
+function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, onDone }: AppProps) {
   const { exit } = useApp();
   const { internal_eventEmitter } = useStdin();
 
@@ -346,11 +355,14 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
     undos: 0,
   });
 
-  const { line, cursor, selected, dropdownVisible, historyFilter, searchQuery, searchSelected, naming } = state;
+  const { line, cursor, selected, dropdownVisible, historyFilter, searchQuery, searchSelected, naming, pasted } = state;
 
+  // ^X mutates the NameIndex inside the predictor mid-prompt — the counter
+  // invalidates the memo below so the forgotten candidate disappears at once.
+  const [namesVersion, setNamesVersion] = useState(0);
   const prediction = useMemo(
     () => predictor.predict({ line, cursor, cwd }),
-    [predictor, line, cursor, cwd],
+    [predictor, line, cursor, cwd, namesVersion],
   );
   // Magic lines (":...") get their candidates from the fixed
   // command list — the predictor does not know them, they never
@@ -368,8 +380,13 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
 
   // Dedup + reversal ONCE per prompt (not per keystroke): with a
   // large history this would otherwise cost a full O(n) pass in every
-  // navigation/search keystroke.
-  const recentUnique = useMemo(() => [...new Set([...historyLines].reverse())], [historyLines]);
+  // navigation/search keystroke. Multiline entries (verbatim paste-mode
+  // submits) are excluded: the single-line editor cannot render or safely
+  // re-edit them — re-paste instead of recall.
+  const recentUnique = useMemo(
+    () => [...new Set([...historyLines].reverse())].filter((entry) => !entry.includes('\n')),
+    [historyLines],
+  );
   // Substring search (fish-style ↑/↓): filter recentUnique by historyFilter,
   // so navigateSubstring navigates directly through the match list. Outside
   // filter mode effectiveHistory is identical to recentUnique.
@@ -440,6 +457,15 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
     // so undo anchoring and withLine insert are reused.
     const paste = extractPaste(input, pasteRef);
     if (paste !== null) {
+      // Multiline pastes bypass the completion machinery entirely: the block
+      // is shown verbatim below the prompt, Enter runs it exactly as pasted
+      // (continuations, quoting and one-command-per-line stay intact — any
+      // collapse to a single line would corrupt `\`-continued commands into
+      // escaped spaces). Single-line pastes keep the normal inline insert.
+      if (isMultilinePaste(paste)) {
+        setState((prev) => enterPasteMode(prev, paste));
+        return;
+      }
       const collapsed = sanitizeInsert(paste).trim();
       if (collapsed.length > 0) {
         const outcome = handleKey(state, { input: collapsed, key: {} }, {
@@ -482,6 +508,14 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
       });
     }
     if (outcome.kind === 'exit') return finish({ type: 'exit' });
+    if (outcome.kind === 'forget') {
+      // Delete the surfaced magic name, keep the prompt open: persistence
+      // happens outside (tombstone + index removal), the bumped version
+      // recomputes the prediction without the forgotten handle.
+      onForget?.(outcome.line);
+      setNamesVersion((version) => version + 1);
+      return setState(outcome.state);
+    }
     if (outcome.kind === 'clear') {
       // ^L: clear the visible screen (scrollback stays), Ink re-renders.
       process.stdout.write('\x1B[2J\x1B[H');
@@ -502,7 +536,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
   // No inline ghost for magic candidates: the handle is not a textual prefix
   // of the command — the dropdown row shows the resolution instead.
   const ghost =
-    !finished && naming === null && magicHints === null && dropdownVisible && cursor === line.length &&
+    !finished && naming === null && pasted === null && magicHints === null && dropdownVisible && cursor === line.length &&
     candidates[selectedIndex]?.source !== 'magic'
       ? (candidates[selectedIndex]?.insert ?? '')
       : '';
@@ -518,13 +552,18 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
   // Discovery badge: the typed line (or the line as it would be if the top
   // suggestion were accepted — computed per dropdown row) already has a handle
   // here. This is the loop: discover via badge → next time type the handle.
-  const discoveryHandle = !finished && naming === null && names ? names.handleFor(line.trim(), cwd) : null;
+  const discoveryHandle = !finished && naming === null && pasted === null && names ? names.handleFor(line.trim(), cwd) : null;
+
+  const pasteLines = pasted !== null ? pasted.split('\n') : [];
 
   if (finished) {
+    // Paste-mode submit: the editor line is empty — freeze a collapsed
+    // preview of the block instead so the terminal keeps a scrollback trace.
+    const frozen = pasted !== null ? singleLine(pasted) : line;
     return (
       <Box>
         <Text color={promptColor}>{promptLabel} ❯ </Text>
-        <Text>{line.length > lineAvail ? `${line.slice(0, lineAvail - 1)}…` : line}</Text>
+        <Text>{frozen.length > lineAvail ? `${frozen.slice(0, lineAvail - 1)}…` : frozen}</Text>
       </Box>
     );
   }
@@ -533,7 +572,11 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
     <Box flexDirection="column">
       <Box>
         <Text color={promptColor}>{promptLabel} ❯ </Text>
-        {naming !== null ? (
+        {pasted !== null ? (
+          // Anything typed before the paste is merged into the block below —
+          // the editor line stays blank until the block runs or is discarded.
+          <Text dimColor>(paste)</Text>
+        ) : naming !== null ? (
           // Frozen while naming — only the badge below is being edited.
           <Text>{line.length > lineAvail ? `${line.slice(0, lineAvail - 1)}…` : line}</Text>
         ) : (
@@ -546,7 +589,25 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
         )}
       </Box>
 
-      {naming !== null ? (
+      {pasted !== null ? (
+        <Box
+          flexDirection="column"
+          marginLeft={1}
+          paddingLeft={1}
+          borderStyle="single"
+          borderColor="gray"
+          borderTop={false}
+          borderRight={false}
+          borderBottom={false}
+        >
+          {pasteLines.slice(0, PASTE_ROWS).map((pasteLine, i) => (
+            <Text key={i}>{truncateEnd(pasteLine, Math.max(20, (process.stdout.columns ?? 80) - 6))}</Text>
+          ))}
+          {pasteLines.length > PASTE_ROWS && (
+            <Text dimColor>… +{pasteLines.length - PASTE_ROWS} more lines</Text>
+          )}
+        </Box>
+      ) : naming !== null ? (
         <Box>
           <Text backgroundColor={namingIssue !== null ? 'red' : 'blue'} color="whiteBright" bold>
             {` ⚡ ${naming}▏ `}
@@ -646,11 +707,17 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
           )}
           {discoveryHandle !== null && <Text> </Text>}
           <Text dimColor>
-            {searchQuery !== null
+            {pasted !== null
+              ? '🐱 multiline paste · enter: run as pasted · esc: discard'
+              : searchQuery !== null
               ? '🐱 ↑/↓: select · enter: accept · esc: back'
-              : dropdownVisible && magicHints === null && selectedIndex > 0 && candidates.length > 0
-                ? '🐱 enter/tab: accept · ↑/↓: select · →: chunk · esc: close'
-                : '🐱 tab: all · →: chunk · ⇧tab: undo · ^⌫: delete chunk · alt/option+⌫: fast · ^r: search'}
+              : dropdownVisible && magicHints === null && candidates[selectedIndex]?.source === 'magic'
+                ? '🐱 enter/tab: accept · ^x: forget name · ↑/↓: select · esc: close'
+                : discoveryHandle !== null
+                  ? '🐱 enter: run · ^n: rename · ^x: forget name'
+                  : dropdownVisible && magicHints === null && selectedIndex > 0 && candidates.length > 0
+                    ? '🐱 enter/tab: accept · ↑/↓: select · →: chunk · esc: close'
+                    : '🐱 tab: all · →: chunk · ⇧tab: undo · ^⌫: delete chunk · alt/option+⌫: fast · ^r: search'}
           </Text>
         </Box>
       )}
@@ -671,6 +738,16 @@ export function acceptedLineFor(
 
 const sourceMarker = (source: RankedCandidate['source']): string =>
   source === 'fs' ? '·fs' : source === 'both' ? '·✓' : '';
+
+/**
+ * A paste counts as multiline when newlines remain after stripping trailing
+ * whitespace — a copied single command usually carries one trailing newline
+ * and must keep the inline behavior (a shell would even auto-run it; we
+ * never do).
+ */
+export function isMultilinePaste(paste: string): boolean {
+  return /[\r\n]/.test(paste.replace(/\s+$/, ''));
+}
 
 /**
  * Shared sanitizing for text that arrives as a block (bracketed paste or a

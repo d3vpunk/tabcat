@@ -60,12 +60,15 @@ tabcat ships an Ink-based smart prompt with ghost text and a scrolling dropdown:
 | `↑` / `↓` | Empty line: history (substring-filtered once you typed); otherwise: move in the dropdown |
 | `Ctrl+R` | Fuzzy history search |
 | `Ctrl+N` | Name this command (magic name) |
+| `Ctrl+X` | Forget the shown magic name |
 | `Ctrl+Backspace` | Delete one chunk · `Alt+Backspace` deletes fast |
 | `Ctrl+A/E/U/W/K/L` | Familiar readline shortcuts |
 | `Esc` | Close the dropdown |
 | `Ctrl+D` | Exit |
 
 Half-typed lines are stashed when you browse history and restored when you come back — like zsh.
+
+**Multiline pastes** bypass completion entirely: the block appears verbatim below the prompt, `Enter` runs it exactly as pasted (backslash continuations, quoting, and one-command-per-line stay intact), `Esc` discards it. Nothing auto-runs — unlike a plain terminal, a pasted trailing newline never submits. Single-line pastes keep the normal inline behavior.
 
 Each command runs in an **isolated shell**. The working directory persists between commands (including `cd x && make`); exported variables, shell functions, options and aliases defined *during* the session apply only to that one command. Aliases from your shell's startup config are imported once at launch.
 
@@ -82,7 +85,7 @@ Long, hard-to-read commands get a short handle you assign yourself — no AI, no
 - **Use:** type the handle as the first word — it appears as the top suggestion with its resolution; `Tab` expands it (append args as usual). Typing the *exact* handle and pressing Enter runs the resolved command in one step. History always records the full command, never the handle.
 - **Discover:** when you type (or complete to) a command that already has a handle here, a ` ⚡ handle ` badge shows it — that's how you learn your own shortcuts.
 - **Scope:** a handle is bound to the directory it was created in and never surfaces elsewhere (relative paths stay safe).
-- **Edit/delete:** `Ctrl+N` on a named command prefills the handle; clear it and press Enter to delete.
+- **Edit/delete:** `Ctrl+N` on a named command prefills the handle; clear it and press Enter to delete. Or press `Ctrl+X` whenever a magic name is in your way — on a selected ⚡ suggestion or the ⚡ badge — to forget it on the spot, without running anything.
 - `:names` lists your handles in the REPL, `tabcat names` on the CLI. Set `TABCAT_MAGIC_NAMES=0` to turn the feature off.
 
 ## Getting started
