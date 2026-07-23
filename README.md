@@ -75,12 +75,12 @@ Long, hard-to-read commands get a short handle you assign yourself — no AI, no
 
 ```text
 ~/proj ❯ docker compose -f qlico/compose.yaml run php vendor/bin/phpstan analyze src
-         ✨ phpstananalyze▏    a-z 0-9 · enter: save+run · esc: cancel
+ ⚡ phpstananalyze▏   a-z 0-9 · enter: save+run · esc: cancel
 ```
 
 - **Create:** type the command, press `Ctrl+N`, type a handle (3–16 chars, `a-z 0-9`), Enter saves it *and* runs the command. Esc cancels without executing. Enter never blocks: an invalid or colliding handle just runs the command without saving.
 - **Use:** type the handle as the first word — it appears as the top suggestion with its resolution; `Tab` expands it (append args as usual). Typing the *exact* handle and pressing Enter runs the resolved command in one step. History always records the full command, never the handle.
-- **Discover:** when you type (or complete to) a command that already has a handle here, a ` ✨ handle ` badge shows it — that's how you learn your own shortcuts.
+- **Discover:** when you type (or complete to) a command that already has a handle here, a ` ⚡ handle ` badge shows it — that's how you learn your own shortcuts.
 - **Scope:** a handle is bound to the directory it was created in and never surfaces elsewhere (relative paths stay safe).
 - **Edit/delete:** `Ctrl+N` on a named command prefills the handle; clear it and press Enter to delete.
 - `:names` lists your handles in the REPL, `tabcat names` on the CLI. Set `TABCAT_MAGIC_NAMES=0` to turn the feature off.

@@ -542,9 +542,8 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
 
       {naming !== null ? (
         <Box>
-          <Text>{' '.repeat(promptWidth)}</Text>
           <Text backgroundColor={namingIssue !== null ? 'red' : 'blue'} color="whiteBright" bold>
-            {` ✨ ${naming}▏ `}
+            {` ⚡ ${naming}▏ `}
           </Text>
           <Text dimColor>
             {`  a-z 0-9 · enter: save+run · esc: cancel${namingIssue === 'taken' ? ' · taken' : namingIssue === 'command' ? ' · = command name' : ''}`}
@@ -599,7 +598,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
                 return (
                   <Text key={candidate.display + candidateIndex} {...(isSelected ? { color: 'cyan' } : {})}>
                     {isSelected ? '› ' : '  '}
-                    <Text color="magenta" bold>✨ {candidate.magicName}</Text>
+                    <Text color="magenta" bold>⚡ {candidate.magicName}</Text>
                     <Text dimColor>  {candidate.display}</Text>
                   </Text>
                 );
@@ -618,7 +617,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
                 <Text key={candidate.display + candidateIndex} {...(isSelected ? { color: 'cyan' } : {})}>
                   {isSelected ? '› ' : '  '}
                   {discovered !== null && (
-                    <Text backgroundColor="blue" color="whiteBright" bold>{` ✨ ${discovered} `}</Text>
+                    <Text backgroundColor="blue" color="whiteBright" bold>{` ⚡ ${discovered} `}</Text>
                   )}
                   {discovered !== null && ' '}
                   {matched && <Text dimColor>{matched}</Text>}
@@ -637,7 +636,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
       {naming === null && (
         <Box>
           {discoveryHandle !== null && (
-            <Text backgroundColor="blue" color="whiteBright" bold>{` ✨ ${discoveryHandle} `}</Text>
+            <Text backgroundColor="blue" color="whiteBright" bold>{` ⚡ ${discoveryHandle} `}</Text>
           )}
           {discoveryHandle !== null && <Text> </Text>}
           <Text dimColor>
