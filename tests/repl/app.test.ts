@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ReplOutput, acceptedLineFor, extractPaste, homeEndKey, lineWindow, magicCandidates, magicCommandHints, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { ReplOutput, acceptedLineFor, extractPaste, homeEndKey, lineWindow, magicCandidates, magicCommandHints, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
 import { PromptState, handleKey, initialPromptState } from '../../src/repl/prompt-state.js';
 import { handleReplCommand, isInteractiveTerminal } from '../../src/repl/run.js';
 
@@ -252,6 +252,27 @@ describe('Bracketed paste detection', () => {
     const ref = pasteRef();
     expect(extractPaste('[200~pasted\x1b[201~', ref)).toBe('pasted');
     expect(ref.current.active).toBe(false);
+  });
+});
+
+// Applied to pastes AND raw multi-character bursts (terminal type-ahead that
+// queued up before the prompt read it — iTerm "Send text at start", tmux
+// send-keys). Newlines must never reach the editor line, control bytes and
+// U+FFFD (half-eaten byte sequences from a previous tty reader) are dropped.
+describe('Block input sanitizing (sanitizeInsert)', () => {
+  it('collapses newlines and tabs to a single space', () => {
+    expect(sanitizeInsert('mkdir -p ~/base\ncd ~/base')).toBe('mkdir -p ~/base cd ~/base');
+    expect(sanitizeInsert('a\r\n\tb')).toBe('a b');
+  });
+
+  it('drops control characters and U+FFFD', () => {
+    expect(sanitizeInsert('��-H \x07foo\x00')).toBe('-H foo');
+    expect(sanitizeInsert('\x1b[Afoo')).toBe('[Afoo'); // ESC dies, printable remnant stays
+  });
+
+  it('leaves plain text, spaces and emoji untouched', () => {
+    expect(sanitizeInsert('git status ')).toBe('git status ');
+    expect(sanitizeInsert('echo "😀 fïn"')).toBe('echo "😀 fïn"');
   });
 });
 

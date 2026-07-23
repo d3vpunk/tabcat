@@ -440,7 +440,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
     // so undo anchoring and withLine insert are reused.
     const paste = extractPaste(input, pasteRef);
     if (paste !== null) {
-      const collapsed = paste.replace(/[\r\n]+/g, ' ').trim();
+      const collapsed = sanitizeInsert(paste).trim();
       if (collapsed.length > 0) {
         const outcome = handleKey(state, { input: collapsed, key: {} }, {
           candidates,
@@ -464,7 +464,13 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
       cwd,
       ...(names ? { names } : {}),
     };
-    const event = { input, key };
+    // A multi-character chunk without paste markers is never keystrokes — it
+    // is type-ahead that queued up in the tty before this prompt read it
+    // (iTerm "Send text at start", tmux send-keys, typing during command
+    // output). Sanitize it like a paste so raw newlines and control bytes
+    // never reach the editor line; real keys always arrive as single
+    // characters or as flags on `key`.
+    const event = input.length > 1 && !key.ctrl && !key.meta ? { input: sanitizeInsert(input), key } : { input, key };
     const outcome = handleKey(state, event, ctx);
     completion.current = trackCompletion(completion.current, state, event, outcome, candidates, selectedIndex);
     if (outcome.kind === 'submit') {
@@ -665,6 +671,17 @@ export function acceptedLineFor(
 
 const sourceMarker = (source: RankedCandidate['source']): string =>
   source === 'fs' ? '·fs' : source === 'both' ? '·✓' : '';
+
+/**
+ * Shared sanitizing for text that arrives as a block (bracketed paste or a
+ * raw type-ahead burst): newlines and tabs collapse to a single space so no
+ * line ever submits or renders as extra rows, remaining control characters
+ * and U+FFFD (replacement character — the tail of a byte sequence another
+ * reader of the tty already consumed half of) are dropped.
+ */
+export function sanitizeInsert(text: string): string {
+  return text.replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f-\u009f\uFFFD]/g, '');
+}
 
 /**
  * Bracketed paste detection (DECSET 2004): the terminal sends pasted
