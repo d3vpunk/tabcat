@@ -110,6 +110,22 @@ npm link                # puts the CLI on your PATH
 
 Run `tabcat import` once — tabcat parses your existing `~/.zsh_history` or `~/.bash_history` (shell auto-detected via `$SHELL`) and starts with useful suggestions from day one. Re-imports are idempotent.
 
+### Autostart (optional)
+
+To drop into tabcat in every new terminal, add this to the end of your `~/.zshrc` or `~/.bashrc`:
+
+```sh
+# start tabcat automatically in interactive terminals
+if [[ $- == *i* ]] && [[ -z "$TABCAT_AUTOSTART" ]] && command -v tabcat >/dev/null; then
+  export TABCAT_AUTOSTART=1
+  command tabcat repl
+fi
+```
+
+The guard variable keeps nested shells (and the commands tabcat itself runs) from re-entering the REPL. Quitting tabcat (`Ctrl+D` or `:exit`) lands you in your regular shell.
+
+> Using a lazy-loaded version manager (nvm & co.)? Make sure the Node bin directory is on `PATH` before this block runs — e.g. `export PATH="$NVM_DIR/versions/node/<your-version>/bin:$PATH"` — otherwise `command -v tabcat` comes up empty at startup.
+
 ## CLI
 
 | Command | Description |
