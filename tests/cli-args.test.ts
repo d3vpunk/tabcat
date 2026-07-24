@@ -46,6 +46,6 @@ describe('CLI arguments', () => {
   });
 
   it('returns command-specific help', () => {
-    expect(parseCliArgs(['simulate', '--help'])).toEqual({ command: 'simulate', commandHelp: true });
+    expect(parseCliArgs(['simulate', '--help'])).toEqual({ command: 'simulate', subs: [], commandHelp: true });
   });
 });

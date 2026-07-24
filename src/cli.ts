@@ -7,8 +7,12 @@ import { Predictor } from './engine/predictor.js';
 import { detectShell } from './engine/shell.js';
 import { namesFileFor, readNames } from './engine/names-store.js';
 import { MAX_HISTORY_ENTRIES, appendHistory, dedupeImportEntries, defaultHistoryFile, readHistory } from './engine/store.js';
+import { AlreadyRunningError, startDaemon } from './daemon/server.js';
+import { pingDaemon, shutdownDaemon } from './daemon/client.js';
+import { defaultSocketPath } from './daemon/paths.js';
+import { PROTOCOL_VERSION } from './daemon/protocol.js';
+import { checkEnvironment, defaultCheckDeps, formatCheck, initSnippet, pluginFilePath } from './plugin/init.js';
 import { realFs } from './repl/real-fs.js';
-import { runRepl } from './repl/run.js';
 import { VERSION } from './version.js';
 
 
@@ -23,14 +27,18 @@ Usage: tabcat [command] [options]
 Commands:
   repl (default)  Start smart prompt
   import          Seed from shell history (zsh/bash, detected via $SHELL) [--file <path>]
-  simulate        Show ranking for a line: --line <str> [--cwd <dir>] [--now <ms>]
+  simulate        Show ranking for a line: --line <str> [--cwd <dir>] [--now <ms>] [--json]
   stats           History overview (entries, directories)
   names           List magic names (Ctrl-N shortcuts from the REPL)
+  daemon          Run the prediction daemon for the zsh plugin (status|stop)
+  plugin init zsh Print the .zshrc snippet for the zsh plugin [--check]
   help            This help
 
 Options:
   --history <path>  Alternative history path (default: ~/.config/tabcat/history.jsonl)
+  --socket <path>   Alternative daemon socket (default: $XDG_RUNTIME_DIR/tabcat/daemon.sock)
   --minimal         Compact prompt (repl): 1-row dropdown, no legend line
+  --json            Machine-readable output (simulate)
   --version         Print version
 
 Options may appear before or after the command. Command help: tabcat <command> --help
@@ -45,8 +53,9 @@ try {
 } catch (error) {
   if (!(error instanceof CliArgumentError)) throw error;
   console.error(`tabcat: ${error.message}`);
-  const commandHint = process.argv.slice(2).find((token) => ['repl', 'import', 'simulate', 'stats', 'names'].includes(token));
-  console.error(commandUsage(error.command ?? (commandHint as 'repl' | 'import' | 'simulate' | 'stats' | 'names' | undefined) ?? 'help'));
+  const known = ['repl', 'import', 'simulate', 'stats', 'names', 'daemon', 'plugin'] as const;
+  const commandHint = process.argv.slice(2).find((token) => (known as readonly string[]).includes(token));
+  console.error(commandUsage(error.command ?? (commandHint as (typeof known)[number] | undefined) ?? 'help'));
   process.exit(2);
 }
 
@@ -75,6 +84,21 @@ switch (args.command) {
     const entries = readHistoryWithWarning(historyFile).slice(-MAX_HISTORY_ENTRIES);
     const predictor = new Predictor(entries, { now: () => now, fs: realFs, homeDir: homedir() });
     const prediction = predictor.predict({ line, cursor: line.length, cwd });
+
+    if (args.json === true) {
+      // Machine-readable twin of the human output — for scripting, CI checks
+      // and bug reports; no daemon involved.
+      console.log(
+        JSON.stringify({
+          entries: entries.length,
+          line,
+          cwd,
+          prefix: prediction.prefix,
+          candidates: prediction.candidates,
+        }),
+      );
+      break;
+    }
 
     console.log(`history: ${entries.length} entries | line: "${line}" | prefix: "${prediction.prefix}"`);
     if (prediction.candidates.length === 0) {
@@ -131,7 +155,89 @@ switch (args.command) {
     break;
   }
 
+  case 'daemon': {
+    const historyFile = args.history ?? defaultHistoryFile();
+    const socketPath = args.socket ?? defaultSocketPath();
+    const sub = args.subs[0];
+
+    if (sub === 'status') {
+      const info = await pingDaemon(socketPath, 1_000);
+      if (info === null) {
+        console.log(`not running (socket ${socketPath})`);
+        process.exitCode = 1;
+        break;
+      }
+      console.log(
+        `running: version ${info.version}, protocol ${info.protocol}, state ${info.state}, pid ${info.pid} (socket ${socketPath})`,
+      );
+      if (info.protocol !== PROTOCOL_VERSION) {
+        console.log(`warning: this CLI speaks protocol ${PROTOCOL_VERSION} — restart the daemon with \`tabcat daemon stop\``);
+      }
+      break;
+    }
+
+    if (sub === 'stop') {
+      if (await shutdownDaemon(socketPath, 2_000)) console.log(`stopped (socket ${socketPath})`);
+      else {
+        console.log(`not running (socket ${socketPath})`);
+        process.exitCode = 1;
+      }
+      break;
+    }
+
+    let handle;
+    try {
+      handle = await startDaemon({
+        socketPath,
+        historyFile,
+        fs: realFs,
+        homeDir: homedir(),
+        magicNames: process.env['TABCAT_MAGIC_NAMES'] !== '0',
+        onWarn: (message) => console.error(`tabcat: ${message}`),
+      });
+    } catch (error) {
+      if (error instanceof AlreadyRunningError) {
+        // The desired end state (a daemon is listening) already holds — the
+        // plugin races several shells into this on purpose.
+        console.error(`tabcat: ${error.message}`);
+        break;
+      }
+      throw error;
+    }
+    console.error(`tabcat: daemon listening on ${handle.socketPath} (history ${historyFile})`);
+    const stop = (): void => void handle.close();
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+    // Survive the terminal that spawned it: the daemon is shared by all shells.
+    process.on('SIGHUP', () => {});
+    await handle.ready;
+    await handle.closed;
+    break;
+  }
+
+  case 'plugin': {
+    if (args.check === true) {
+      const result = checkEnvironment(defaultCheckDeps());
+      console.log(formatCheck(result));
+      if (!result.ok) process.exitCode = 1;
+      break;
+    }
+    const pluginFile = pluginFilePath();
+    if (!existsSync(pluginFile)) {
+      console.error(`tabcat: plugin file not found: ${pluginFile}`);
+      console.error('tabcat: run `npm run build` in a checkout, or reinstall the package.');
+      process.exitCode = 1;
+      break;
+    }
+    console.log(initSnippet(pluginFile));
+    break;
+  }
+
   case 'repl': {
+    // Imported on demand: the REPL pulls in Ink and React, which cost ~250 ms
+    // of module loading. `tabcat daemon` is started from a keystroke path and
+    // must not pay for a UI it never renders.
+    const { runRepl } = await import('./repl/run.js');
     await runRepl(args.history ?? defaultHistoryFile(), { minimal: args.minimal ?? false });
     break;
   }

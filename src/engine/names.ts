@@ -82,6 +82,17 @@ export class NameIndex {
     this.byLine.delete(line);
   }
 
+  /**
+   * Replaces the whole index in place. The Predictor keeps this instance by
+   * reference, so reloading names.jsonl (daemon: another shell created a
+   * handle) must mutate the existing index instead of building a new one —
+   * otherwise the reload would force a full predictor rebuild.
+   */
+  reset(names: readonly MagicName[]): void {
+    this.byLine.clear();
+    for (const name of names) this.add(name);
+  }
+
   /** Is this command already named? */
   has(line: string): boolean {
     return this.byLine.has(line);
