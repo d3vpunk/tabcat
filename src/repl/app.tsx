@@ -556,7 +556,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
   const ownHandle = names ? names.handleFor(line.trim(), cwd) : null;
   const namingIssue: HandleIssue | null =
     naming !== null && naming !== '' && names
-      ? handleIssue(naming, line, names.handles().filter((handle) => handle !== ownHandle))
+      ? handleIssue(naming, line, names.handles(cwd).filter((handle) => handle !== ownHandle))
       : null;
   // Discovery badge: the typed line (or the line as it would be if the top
   // suggestion were accepted — computed per dropdown row) already has a handle

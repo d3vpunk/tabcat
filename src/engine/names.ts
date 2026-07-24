@@ -93,9 +93,13 @@ export class NameIndex {
     return name !== undefined && cwdMatches(name, cwd) ? name.name : null;
   }
 
-  /** All handles in use (collision guard). */
-  handles(): string[] {
-    return [...this.byLine.values()].map((name) => name.name);
+  /** Handles in use (collision guard). With `cwd`, only handles active there —
+   *  the same handle in an unrelated directory never surfaces, so it is no
+   *  collision. */
+  handles(cwd?: string): string[] {
+    return [...this.byLine.values()]
+      .filter((name) => cwd === undefined || cwdMatches(name, cwd))
+      .map((name) => name.name);
   }
 
   all(): MagicName[] {

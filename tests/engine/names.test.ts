@@ -72,6 +72,16 @@ describe('names: NameIndex', () => {
     expect(index.handleFor(name().line, CWD)).toBe('newname');
   });
 
+  it('handles(cwd) hides handles that only live elsewhere; context-free stays', () => {
+    const index = new NameIndex([
+      name(),
+      name({ line: 'cmd-b', name: 'elsewhere', cwds: [OTHER] }),
+      name({ line: 'cmd-c', name: 'everywhere', cwds: [] }),
+    ]);
+    expect(index.handles(CWD).sort()).toEqual(['everywhere', 'phpstananalyze']);
+    expect(index.handles().sort()).toEqual(['elsewhere', 'everywhere', 'phpstananalyze']);
+  });
+
   it('has and remove work by line', () => {
     const index = new NameIndex([name()]);
     expect(index.has(name().line)).toBe(true);

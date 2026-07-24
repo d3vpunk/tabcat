@@ -305,7 +305,7 @@ const anchorAfterAccept = (state: PromptState): PromptState =>
 /** Handles in use, minus the one already owned by this line (renaming to itself is not a collision). */
 function existingHandles(state: PromptState, ctx: HandlerContext): string[] {
   const own = ctx.names?.handleFor(state.line.trim(), ctx.cwd ?? '') ?? null;
-  return (ctx.names?.handles() ?? []).filter((handle) => handle !== own);
+  return (ctx.names?.handles(ctx.cwd ?? '') ?? []).filter((handle) => handle !== own);
 }
 
 export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerContext): KeyOutcome {
