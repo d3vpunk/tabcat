@@ -81,11 +81,16 @@ export function handleReplCommand(line: string, context: ReplCommandContext): Re
   }
 }
 
+export interface ReplOptions {
+  /** Compact prompt: 1-row dropdown with inline counter, no legend line. */
+  minimal?: boolean;
+}
+
 /**
  * The REPL loop: smart prompt -> Ink unmounts -> command runs natively ->
  * learn -> next prompt. Seamless shell experience.
  */
-export async function runRepl(historyFile: string = defaultHistoryFile()): Promise<void> {
+export async function runRepl(historyFile: string = defaultHistoryFile(), options: ReplOptions = {}): Promise<void> {
   if (!isInteractiveTerminal(process.stdin, process.stdout)) {
     console.error('tabcat: REPL requires an interactive terminal (TTY).');
     process.exitCode = 1;
@@ -153,6 +158,7 @@ export async function runRepl(historyFile: string = defaultHistoryFile()): Promi
       homeDir,
       historyLines,
       lastExitCode,
+      minimal: options.minimal ?? false,
       ...(magicEnabled
         ? {
             names: nameIndex,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ReplOutput, acceptedLineFor, extractPaste, homeEndKey, isMultilinePaste, lineWindow, magicCandidates, magicCommandHints, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { ReplOutput, acceptedLineFor, clampMinimalDisplay, extractPaste, homeEndKey, isMultilinePaste, legendVisible, lineWindow, magicCandidates, magicCommandHints, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
 import { PromptState, handleKey, initialPromptState } from '../../src/repl/prompt-state.js';
 import { handleReplCommand, isInteractiveTerminal } from '../../src/repl/run.js';
 
@@ -17,6 +17,51 @@ describe('REPL environment', () => {
 
   it('does not confuse directories with the same prefix with home', () => {
     expect(shortenCwd('/home/user-two/project', '/home/user')).toBe('/home/user-two/project');
+  });
+});
+
+describe('minimal variant row clamp', () => {
+  it('leaves a fitting display untouched', () => {
+    expect(clampMinimalDisplay('git status', 80, 10)).toBe('git status');
+  });
+
+  it('truncates so display + overhead + indent never wrap', () => {
+    const long = 'git commit --amend --no-edit --all --signoff --verbose';
+    const clamped = clampMinimalDisplay(long, 40, 12);
+    expect(clamped.length).toBeLessThanOrEqual(40 - 6 - 12);
+    expect(clamped.endsWith('…')).toBe(true);
+  });
+
+  it('keeps a 10-column stub on tiny panes', () => {
+    const clamped = clampMinimalDisplay('some-long-command --flag', 20, 18);
+    expect(clamped.length).toBe(10);
+    expect(clamped.endsWith('…')).toBe(true);
+  });
+});
+
+describe('minimal variant legend', () => {
+  const idle = { pasted: null, searchQuery: null, discoveryHandle: null, magicHints: null, dropdownOpen: false };
+
+  it('full mode always shows the legend', () => {
+    expect(legendVisible(false, idle)).toBe(true);
+    expect(legendVisible(false, { ...idle, dropdownOpen: true })).toBe(true);
+  });
+
+  it('minimal hides the legend in the default and dropdown states', () => {
+    expect(legendVisible(true, idle)).toBe(false);
+    expect(legendVisible(true, { ...idle, dropdownOpen: true })).toBe(false);
+    expect(legendVisible(true, { ...idle, magicHints: [] })).toBe(false);
+  });
+
+  it('minimal keeps the paste and search hints (modes behave as in full)', () => {
+    expect(legendVisible(true, { ...idle, pasted: 'a\nb' })).toBe(true);
+    expect(legendVisible(true, { ...idle, searchQuery: 'git' })).toBe(true);
+  });
+
+  it('minimal shows the discovery badge only when the line below the prompt is free', () => {
+    expect(legendVisible(true, { ...idle, discoveryHandle: 'deploy' })).toBe(true);
+    expect(legendVisible(true, { ...idle, discoveryHandle: 'deploy', dropdownOpen: true })).toBe(false);
+    expect(legendVisible(true, { ...idle, discoveryHandle: 'deploy', magicHints: [] })).toBe(false);
   });
 });
 

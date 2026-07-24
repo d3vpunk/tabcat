@@ -8,13 +8,15 @@ export interface CliArgs {
   line?: string;
   cwd?: string;
   now?: number;
+  minimal?: boolean;
   commandHelp: boolean;
 }
 
 const COMMANDS = new Set<CliCommand>(['repl', 'import', 'simulate', 'stats', 'names', 'help']);
 const VALUE_OPTIONS = new Set(['history', 'file', 'line', 'cwd', 'now']);
+const FLAG_OPTIONS = new Set(['minimal']);
 const ALLOWED_OPTIONS: Record<DataCommand, ReadonlySet<string>> = {
-  repl: new Set(['history']),
+  repl: new Set(['history', 'minimal']),
   import: new Set(['history', 'file']),
   simulate: new Set(['history', 'line', 'cwd', 'now']),
   stats: new Set(['history']),
@@ -35,6 +37,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
   let commandHelp = false;
   let version = false;
   const values = new Map<string, string>();
+  const flags = new Set<string>();
 
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i] as string;
@@ -55,6 +58,12 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
 
     const match = /^--([^=]+)(?:=(.*))?$/.exec(token);
     const name = match?.[1];
+    if (name && FLAG_OPTIONS.has(name)) {
+      if (match?.[2] !== undefined) throw new CliArgumentError(`--${name} does not take a value`, command);
+      if (flags.has(name)) throw new CliArgumentError(`Option specified multiple times: --${name}`, command);
+      flags.add(name);
+      continue;
+    }
     if (!name || !VALUE_OPTIONS.has(name)) throw new CliArgumentError(`Unknown option: ${token}`, command);
     if (values.has(name)) throw new CliArgumentError(`Option specified multiple times: --${name}`, command);
     const inline = match?.[2];
@@ -66,7 +75,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
   }
 
   if (version) {
-    if (command !== undefined || commandHelp || values.size > 0) {
+    if (command !== undefined || commandHelp || values.size > 0 || flags.size > 0) {
       throw new CliArgumentError('--version cannot be combined with other arguments', command);
     }
     return { command: 'version', commandHelp: false };
@@ -74,12 +83,12 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
 
   const resolvedCommand = command ?? (commandHelp ? 'help' : 'repl');
   if (resolvedCommand === 'help') {
-    if (values.size > 0) throw new CliArgumentError('help does not accept options', resolvedCommand);
+    if (values.size > 0 || flags.size > 0) throw new CliArgumentError('help does not accept options', resolvedCommand);
     return { command: 'help', commandHelp: false };
   }
   if (resolvedCommand === 'version') throw new CliArgumentError('version is not a command', resolvedCommand);
 
-  for (const name of values.keys()) {
+  for (const name of [...values.keys(), ...flags]) {
     if (!ALLOWED_OPTIONS[resolvedCommand].has(name)) {
       throw new CliArgumentError(`--${name} is not valid for ${resolvedCommand}`, resolvedCommand);
     }
@@ -104,13 +113,14 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
   if (line !== undefined) result.line = line;
   if (cwd !== undefined) result.cwd = cwd;
   if (now !== undefined) result.now = now;
+  if (flags.has('minimal')) result.minimal = true;
   return result;
 }
 
 export function commandUsage(command: CliCommand): string {
   switch (command) {
     case 'repl':
-      return 'Usage: tabcat [repl] [--history <path>]';
+      return 'Usage: tabcat [repl] [--history <path>] [--minimal]';
     case 'import':
       return 'Usage: tabcat import [--file <path>] [--history <path>]';
     case 'simulate':

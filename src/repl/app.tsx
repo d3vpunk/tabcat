@@ -38,6 +38,12 @@ export interface PromptOptions {
    * refreshes in place.
    */
   onForget?: ((line: string) => void) | undefined;
+  /**
+   * Compact variant for short terminals (IDE panes): the dropdown collapses
+   * to a single row with an inline counter and the legend line disappears.
+   * Search, paste mode, naming badge and `:`-hints render as in full mode.
+   */
+  minimal?: boolean | undefined;
 }
 
 type CompletionCounters = Omit<CompletionTelemetry, 'durationMs'>;
@@ -338,7 +344,7 @@ interface AppProps extends PromptOptions {
   onDone: (result: PromptResult) => void;
 }
 
-function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, onDone }: AppProps) {
+function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, minimal = false, onDone }: AppProps) {
   const { exit } = useApp();
   const { internal_eventEmitter } = useStdin();
 
@@ -369,14 +375,17 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
   // end up in the history.
   const candidates = magicCandidates(line, cursor) ?? prediction.candidates;
   const selectedIndex = Math.min(selected, Math.max(0, candidates.length - 1));
+  // Minimal variant: exactly one dropdown row — the window degenerates to
+  // the selected candidate, the counter moves inline into that row.
+  const dropdownRows = minimal ? 1 : DROPDOWN_ROWS;
   // Center-anchored: selected stays centered in the window, except at the start/end.
   // This way the window scrolls along smoothly instead of jumping only when selected
   // reaches the bottom edge — and ↑/↓ indicators appear fluidly.
   const dropdownStart = Math.min(
-    Math.max(0, selectedIndex - Math.floor(DROPDOWN_ROWS / 2)),
-    Math.max(0, candidates.length - DROPDOWN_ROWS),
+    Math.max(0, selectedIndex - Math.floor(dropdownRows / 2)),
+    Math.max(0, candidates.length - dropdownRows),
   );
-  const visibleCandidates = candidates.slice(dropdownStart, dropdownStart + DROPDOWN_ROWS);
+  const visibleCandidates = candidates.slice(dropdownStart, dropdownStart + dropdownRows);
 
   // Dedup + reversal ONCE per prompt (not per keystroke): with a
   // large history this would otherwise cost a full O(n) pass in every
@@ -659,27 +668,45 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
             {visibleCandidates.map((candidate, i) => {
               const candidateIndex = dropdownStart + i;
               const isSelected = candidateIndex === selectedIndex;
+              // Minimal: the counter has no row of its own — it rides along
+              // dim at the end of the single visible row.
+              const counterText = minimal && candidates.length > 1
+                ? `  ${selectedIndex + 1}/${candidates.length}`
+                : '';
+              const inlineCounter = counterText !== '' ? <Text dimColor>{counterText}</Text> : null;
+              const columns = process.stdout.columns ?? 80;
               if (candidate.source === 'magic') {
                 // Handle in magenta, resolved command dim — the row itself IS
                 // the resolution preview (no ghost for magic candidates).
+                const display = minimal
+                  ? clampMinimalDisplay(candidate.display, columns, 2 + 3 + (candidate.magicName?.length ?? 0) + 2 + counterText.length)
+                  : candidate.display;
                 return (
                   <Text key={candidate.display + candidateIndex} {...(isSelected ? { color: 'cyan' } : {})}>
                     {isSelected ? '› ' : '  '}
                     <Text color="magenta" bold>⚡ {candidate.magicName}</Text>
-                    <Text dimColor>  {candidate.display}</Text>
+                    <Text dimColor>  {display}</Text>
+                    {inlineCounter}
                   </Text>
                 );
               }
-              const { matched, rest } = splitMatched(
-                candidate.display,
-                candidate.acceptedPrefixLength ?? prediction.prefix.length,
-              );
               // Discovery: accepting this suggestion would land on a command
               // that already has a handle here — teach it inline.
               const discovered =
                 isSelected && names && cursor === line.length
                   ? names.handleFor(acceptedLineFor(line, cursor, candidate, prediction.prefix.length).trim(), cwd)
                   : null;
+              const display = minimal
+                ? clampMinimalDisplay(
+                    candidate.display,
+                    columns,
+                    2 + (discovered !== null ? discovered.length + 7 : 0) + 4 + counterText.length,
+                  )
+                : candidate.display;
+              const { matched, rest } = splitMatched(
+                display,
+                candidate.acceptedPrefixLength ?? prediction.prefix.length,
+              );
               return (
                 <Text key={candidate.display + candidateIndex} {...(isSelected ? { color: 'cyan' } : {})}>
                   {isSelected ? '› ' : '  '}
@@ -690,35 +717,46 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
                   {matched && <Text dimColor>{matched}</Text>}
                   {rest}
                   <Text dimColor> {sourceMarker(candidate.source)}</Text>
+                  {inlineCounter}
                 </Text>
               );
             })}
-            {candidates.length > DROPDOWN_ROWS && (
+            {!minimal && candidates.length > DROPDOWN_ROWS && (
               <Text dimColor>{selectedIndex + 1}/{candidates.length}</Text>
             )}
           </Box>
         )
       )}
 
-      {naming === null && (
+      {naming === null && legendVisible(minimal, {
+        pasted,
+        searchQuery,
+        discoveryHandle,
+        magicHints,
+        dropdownOpen: dropdownVisible && candidates.length > 0,
+      }) && (
         <Box>
           {discoveryHandle !== null && (
             <Text backgroundColor="blue" color="whiteBright" bold>{` ⚡ ${discoveryHandle} `}</Text>
           )}
           {discoveryHandle !== null && <Text> </Text>}
-          <Text dimColor>
-            {pasted !== null
-              ? '🐱 multiline paste · enter: run as pasted · esc: discard'
-              : searchQuery !== null
-              ? '🐱 ↑/↓: select · enter: accept · esc: back'
-              : dropdownVisible && magicHints === null && candidates[selectedIndex]?.source === 'magic'
-                ? '🐱 enter/tab: accept · ^x: forget name · ↑/↓: select · esc: close'
-                : discoveryHandle !== null
-                  ? '🐱 enter: run · ^n: rename · ^x: forget name'
-                  : dropdownVisible && magicHints === null && selectedIndex > 0 && candidates.length > 0
-                    ? '🐱 enter/tab: accept · ↑/↓: select · →: chunk · esc: close'
-                    : '🐱 tab: all · →: chunk · ⇧tab: undo · ^⌫: delete chunk · alt/option+⌫: fast · ^r: search'}
-          </Text>
+          {/* Minimal keeps the legend only for paste/search (their hints ARE
+              the mode UI) — the discovery badge stands alone without key help. */}
+          {(!minimal || pasted !== null || searchQuery !== null) && (
+            <Text dimColor>
+              {pasted !== null
+                ? '🐱 multiline paste · enter: run as pasted · esc: discard'
+                : searchQuery !== null
+                ? '🐱 ↑/↓: select · enter: accept · esc: back'
+                : dropdownVisible && magicHints === null && candidates[selectedIndex]?.source === 'magic'
+                  ? '🐱 enter/tab: accept · ^x: forget name · ↑/↓: select · esc: close'
+                  : discoveryHandle !== null
+                    ? '🐱 enter: run · ^n: rename · ^x: forget name'
+                    : dropdownVisible && magicHints === null && selectedIndex > 0 && candidates.length > 0
+                      ? '🐱 enter/tab: accept · ↑/↓: select · →: chunk · esc: close'
+                      : '🐱 tab: all · →: chunk · ⇧tab: undo · ^⌫: delete chunk · alt/option+⌫: fast · ^r: search'}
+            </Text>
+          )}
         </Box>
       )}
     </Box>
@@ -738,6 +776,40 @@ export function acceptedLineFor(
 
 const sourceMarker = (source: RankedCandidate['source']): string =>
   source === 'fs' ? '·fs' : source === 'both' ? '·✓' : '';
+
+/**
+ * Width clamp for the single dropdown row in the minimal variant: badge,
+ * marker and inline counter must never push the row into a terminal
+ * line-wrap — a wrapped row would silently spend the second (and last)
+ * screen line the variant promises not to use. `overheadCols` counts every
+ * column in the row besides the display itself; 6 more columns cover the
+ * box indent (margin + border + padding) plus a safety margin for
+ * double-width glyphs (⚡). Floor of 10 keeps a usable stub on tiny panes.
+ */
+export function clampMinimalDisplay(display: string, columns: number, overheadCols: number): string {
+  return truncateEnd(display, Math.max(10, columns - 6 - overheadCols));
+}
+
+/**
+ * Bottom line in the minimal variant: gone in the default state (budget:
+ * prompt + max one extra line). It stays for paste/search — their hints are
+ * the mode UI — and for the discovery badge, but only when the one-line
+ * budget below the prompt is not already spent on the dropdown or `:`-hints.
+ */
+export function legendVisible(
+  minimal: boolean,
+  state: {
+    pasted: string | null;
+    searchQuery: string | null;
+    discoveryHandle: string | null;
+    magicHints: unknown | null;
+    dropdownOpen: boolean;
+  },
+): boolean {
+  if (!minimal) return true;
+  if (state.pasted !== null || state.searchQuery !== null) return true;
+  return state.discoveryHandle !== null && state.magicHints === null && !state.dropdownOpen;
+}
 
 /**
  * A paste counts as multiline when newlines remain after stripping trailing

@@ -30,6 +30,7 @@ Commands:
 
 Options:
   --history <path>  Alternative history path (default: ~/.config/tabcat/history.jsonl)
+  --minimal         Compact prompt (repl): 1-row dropdown, no legend line
   --version         Print version
 
 Options may appear before or after the command. Command help: tabcat <command> --help
@@ -131,7 +132,7 @@ switch (args.command) {
   }
 
   case 'repl': {
-    await runRepl(args.history ?? defaultHistoryFile());
+    await runRepl(args.history ?? defaultHistoryFile(), { minimal: args.minimal ?? false });
     break;
   }
 }

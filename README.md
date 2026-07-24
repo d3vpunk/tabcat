@@ -134,6 +134,7 @@ The guard variable keeps nested shells (and the commands tabcat itself runs) fro
 | Command | Description |
 |---|---|
 | `tabcat` / `tabcat repl` | Start the smart prompt |
+| `tabcat --minimal` | Compact prompt for short terminals (IDE panes): one suggestion row with inline counter, no legend line — search, paste mode and naming behave as usual |
 | `tabcat import [--file <path>]` | Seed the model from shell history |
 | `tabcat simulate --line 'git ch' [--cwd <dir>] [--now <ms>]` | Show the ranking and what Tab would insert — explore and calibrate the algorithm without the UI |
 | `tabcat stats` | History overview (entries, directories) |
