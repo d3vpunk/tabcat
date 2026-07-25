@@ -21,8 +21,9 @@ final class PromptModel: ObservableObject {
     @Published private(set) var directories: [Directory] = []
     @Published private(set) var selection = 0
     @Published private(set) var status = "connecting…"
-    /// Lines Enter was pressed on. Nothing is executed yet — no PTY in this build.
-    @Published private(set) var wouldRun: [String] = []
+    /// The run in the foreground, if any. One at a time for now; the badge stack
+    /// that keeps several is the next step.
+    @Published private(set) var run: Run?
 
     private var client: DaemonClient?
 
@@ -170,11 +171,66 @@ final class PromptModel: ObservableObject {
     }
 
     func submit() {
-        guard !typed.isEmpty else { return }
-        // No PTY in this build, so this is where execution WILL go. Showing the
-        // line rather than pretending it ran keeps the gap visible.
-        wouldRun.append(typed)
+        let line = typed
+        guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        // One at a time until the badge stack exists. Refusing beats silently
+        // replacing a run whose output the user is still reading.
+        if let run, run.state == .running {
+            status = "still running — Escape cancels it"
+            return
+        }
         typed = ""
+        ghost = ""
+        handle = ""
+
+        Task { [line] in
+            let command = await resolved(line)
+            let cwd = self.cwd
+            let run = Run(command: command, cwd: cwd)
+            self.run = run
+            run.start { [weak self] code in
+                self?.report(line: command, cwd: cwd, exitCode: code)
+            }
+        }
+    }
+
+    /// Expands a magic-name handle to the command it stands for. The daemon owns
+    /// that mapping, so it is asked rather than guessed; anything else runs as typed.
+    private func resolved(_ line: String) async -> String {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let client, trimmed.hasPrefix("@") || trimmed.hasPrefix("⚡") else { return line }
+        let handle = String(trimmed.dropFirst())
+        do {
+            let rows = try await client.request(op: "names", fields: ["resolve", cwd, handle, ""])
+            let expansion = rows[0].count > 2 ? rows[0][2] : ""
+            return expansion.isEmpty ? line : expansion
+        } catch {
+            return line
+        }
+    }
+
+    /// Feeds the run back into the model the zsh plugin shares. Without this the
+    /// overlay would be a parallel universe: its own usage would never influence
+    /// the ranking, and the chip row would never learn a directory.
+    private func report(line: String, cwd: String, exitCode: Int32) {
+        guard let client else { return }
+        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+        Task {
+            do {
+                _ = try await client.request(op: "learn", fields: [
+                    String(exitCode), String(timestamp), cwd, line,
+                ])
+            } catch {
+                // Losing one entry is not worth interrupting the user over, but it
+                // must not be silent either — the chip row depends on this.
+                status = "not learned: \(describe(error))"
+            }
+        }
+    }
+
+    func dismissRun() {
+        run?.terminate()
+        run = nil
     }
 
     func clear() {

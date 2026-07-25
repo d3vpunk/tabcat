@@ -117,6 +117,10 @@ setvbuf(stdout, nil, _IONBF, 0)
 if CommandLine.arguments.contains("--check") {
     exit(await Check.run())
 }
+// Separate flag because it appends a history entry, unlike --check.
+if CommandLine.arguments.contains("--selftest") {
+    exit(await Check.selftest())
+}
 
 let app = NSApplication.shared
 // No Dock icon, no menu bar, no app switch when the overlay appears. Info.plist

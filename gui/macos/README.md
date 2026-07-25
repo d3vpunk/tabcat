@@ -5,18 +5,31 @@ terminal is open and one command needs to run: press ⌥Space, an overlay appear
 with a prompt and ghost text from the same engine, and the app you were working in
 stays frontmost.
 
-This is a skeleton. What works: the global hotkey, the overlay, the directory chip
-row, and the prompt with live predictions from the daemon.
+What works: the global hotkey, the overlay, the directory chip row, the prompt with
+live predictions, and running a command in a pseudo terminal whose result is fed
+back to the daemon with `learn` — so overlay usage improves the same ranking the
+zsh plugin uses.
 
 Not built yet:
 
-- **execution** — Enter shows what *would* run; there is no PTY
-- **`learn`** — a run does not yet feed the model, so the ranking never improves
-  from overlay usage
-- **cards and the badge stack** — the shrink-into-the-corner animation exists only
-  as a spike
+- **interactive commands.** There is no way to send input to a running command, so
+  a `sudo` password prompt hangs and is cancelled with Escape. That gap is
+  deliberate: routing the prompt field into the pty would put a password on screen
+  in plain text, and a masked field needs to know when the child is asking for a
+  secret, which cannot be detected reliably.
+- **full terminal emulation.** Newlines, carriage returns and escape stripping are
+  handled, which covers `git`, `npm`, `docker` and friends. Cursor addressing is
+  not, so a full-screen program (`vim`, `git rebase -i`) renders wrong.
+- **several runs at once.** One at a time; Enter is refused while one is running.
+  The badge stack is what lifts that.
+- **cards shrinking into the corner** — exists as a spike, not here.
 - **filtering the chip row by typing** — ⌘-digit and the ⌥ cycle cover the fluent
-  path, so this waits until the row is long enough to be worth it
+  path, so this waits until the row is long enough to be worth it.
+
+Commands run through `$SHELL -ic`, so aliases, functions and PATH edits from your
+rc file exist — most of what a person types is an alias. `TABCAT_PLUGIN_NO_SETUP=1`
+is set for that shell, or every single run would load tabcat's own plugin, bind
+keys and warm a daemon.
 
 ## Keys
 
@@ -27,8 +40,8 @@ Not built yet:
 | release ⌥ | commit the directory, caret is already in the field |
 | ⌘1…⌘5 | jump straight to a chip |
 | Tab or → | accept the ghost |
-| Enter | submit (currently: show what would run) |
-| Escape | clear the line |
+| Enter | run the line |
+| Escape | clear the line; with an empty line, dismiss or cancel the run |
 
 The ⌥Space double meaning is deliberate and is why `Controller` tracks whether ⌥
 has been held continuously since the overlay appeared: the hotkey *is* ⌥Space, so
@@ -73,7 +86,18 @@ It resolves the socket path, pings, asks for `cwds` and one prediction, and repo
 each step. `bad_op: unknown op: cwds` means the *running daemon* predates the op —
 restart it with `tabcat daemon stop`.
 
-It also reports the cold-start seed even when it would not be used, because that
+```sh
+TABCAT_SOCKET=/tmp/scratch.sock swift run TabcatGUI --selftest
+```
+
+`--selftest` goes one step further: it runs a command in a pty, reports it with
+`learn`, then asks for it back through `predict` and checks that its directory
+turned up in `cwds`. That loop is what makes the overlay part of the same model
+rather than a parallel universe, so it is worth being able to prove. It has its own
+flag because it **appends a history entry** — point `$TABCAT_SOCKET` at a scratch
+daemon, not at your own.
+
+`--check` also reports the cold-start seed even when it would not be used, because that
 path only runs on a fresh install — the one moment nobody is watching a diagnostic.
 That is not paranoia: the first implementation used
 `mdfind "kMDItemFSName == '.git'"` and returned nothing at all, because Spotlight

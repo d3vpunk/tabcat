@@ -117,8 +117,14 @@ struct PromptView: View {
         // actually there, otherwise the caret must behave normally.
         .onKeyPress(.tab) { model.acceptGhost() ? .handled : .ignored }
         .onKeyPress(.rightArrow) { model.acceptGhost() ? .handled : .ignored }
+        // Escape clears the line first, and only dismisses the run once there is
+        // nothing left to clear — otherwise one key would do two things at once.
         .onKeyPress(.escape) {
-            model.clear()
+            if !model.typed.isEmpty {
+                model.clear()
+            } else {
+                model.dismissRun()
+            }
             return .handled
         }
         // ⌘1…⌘9 are NOT handled here: Command combinations go to the menu bar as
@@ -127,15 +133,9 @@ struct PromptView: View {
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !model.wouldRun.isEmpty {
-                ForEach(model.wouldRun.suffix(3), id: \.self) { line in
-                    Text("would run: \(line)")
-                        .font(Typeface.small(11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            if let run = model.run {
+                RunCard(run: run)
             }
             Text(model.status)
                 .font(.system(size: 10))
