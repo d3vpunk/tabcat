@@ -17,15 +17,13 @@ failed one stays, because an error nobody saw is the same as no error at all.
 
 Not built yet:
 
-- **interactive commands.** There is no way to send input to a running command, so
-  a `sudo` password prompt hangs and is cancelled with Escape. That gap is
-  deliberate: routing the prompt field into the pty would put a password on screen
-  in plain text, and a masked field needs to know when the child is asking for a
-  secret, which cannot be detected reliably.
-- **full terminal emulation.** Newlines, carriage returns, colour stripping and the
-  cursor moves a progress bar redraws itself with are handled, which covers `git`,
-  `npm`, `composer`, `phpstan` and friends. Absolute cursor positioning and scroll
-  regions are not, so a full-screen program (`vim`, `git rebase -i`) renders wrong.
+- **typing into a running command.** The card shows a real terminal, so `vim` and a
+  progress bar render correctly, but keystrokes are not routed to it yet — a `sudo`
+  prompt still waits and is cancelled with Escape. Now that a real terminal is in
+  place this is safe to add: input goes to the pty and the *child* controls echo
+  through termios, so `sudo` hides a password exactly as it does in Terminal.app.
+  The earlier objection applied to routing a SwiftUI text field into the pty, which
+  would have shown it in plain text.
 - **filtering the chip row by typing** — ⌘-digit and the ⌥ cycle cover the fluent
   path, so this waits until the row is long enough to be worth it.
 
@@ -153,6 +151,16 @@ The overlay talks to tabcat over **two** channels and no others: the daemon sock
 and `tabcat daemon path` to find it. It imports no TypeScript and reads no history
 file directly. Keeping that line intact is what makes moving this into its own
 repository a move rather than a rewrite.
+
+One external dependency: **SwiftTerm**, pinned to a revision rather than a version
+range, because it is roughly 15k lines of someone else's terminal emulator inside a
+process that runs shell commands, and a tag can be moved.
+
+Watch its exit reporting. `LocalProcess` has two termination paths that disagree
+about what the `exitCode` parameter means — one hands over the raw `waitpid` status,
+the other an already-decoded code — so `exit 3` can arrive as 768. `ExitStatus`
+normalises it, and `--check` pins nine cases, because the daemon's `learn` accepts
+anything up to 4096 and would have stored the raw number without complaint.
 
 Three things are duplicated from the engine on purpose, each with a reason:
 

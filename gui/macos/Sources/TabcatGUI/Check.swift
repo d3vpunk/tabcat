@@ -1,4 +1,5 @@
 import Foundation
+import SwiftTerm
 
 /// `TabcatGUI --check` — a headless preflight, in the spirit of
 /// `tabcat plugin init zsh --check`.
@@ -85,59 +86,66 @@ enum Check {
         }
 
         // Always reported, not only when it would be used: this is the cold-start
-        // path, and a broken Spotlight query would otherwise only surface on a
-        // fresh install — the one moment nobody is watching a diagnostic.
+        // path, and it would otherwise only surface on a fresh install — the one
+        // moment nobody is watching a diagnostic. Which is exactly how the first
+        // implementation shipped broken, using an mdfind that cannot see hidden
+        // entries and therefore never found a single `.git`.
         let seed = await DirectorySeed.gitRepositories(limit: 5)
         if seed.isEmpty {
-            line(false, "seed: mdfind found no git repositories under ~ — cold start would fall back to ~ alone")
+            line(false, "seed: no git repositories found under ~ — cold start would fall back to ~ alone")
         } else {
             line(true, "seed: \(seed.count) repositories, newest first")
             for path in seed { print("        \(path)") }
         }
 
-        // Writes nothing anywhere: a command that only echoes, with a chosen exit
-        // code so the 128+signal decoding is exercised too.
-        let pty = await runInPTY("echo tabcat-pty-ok; exit 3")
-        let ptyOK = pty.output.contains("tabcat-pty-ok") && pty.code == 3
-        line(ptyOK, "pty: exit \(pty.code), output \(pty.output.isEmpty ? "(none)" : "\"\(pty.output.trimmingCharacters(in: .whitespacesAndNewlines))\"")")
-        if !ptyOK { ok = false }
+        // Writes nothing anywhere: a command that only echoes, with a chosen exit code
+        // so the whole chain — spawn, terminal, exit reporting — is exercised.
+        let probe = await runInTerminal("echo tabcat-pty-ok; exit 3")
+        let probeOK = probe.screen.contains("tabcat-pty-ok") && probe.code == 3
+        line(probeOK, "terminal: exit \(probe.code.map(String.init) ?? "unknown"), marker on screen: \(probe.screen.contains("tabcat-pty-ok"))")
+        if !probeOK { ok = false }
 
+        // The regression a screenshot once found: a Symfony-style progress bar
+        // arriving as a dozen bars side by side. The emulator owns this behaviour now,
+        // but the case stays — it is the shape real commands emit, and proving it comes
+        // out as ONE bar costs nothing.
+        let bar = await runInTerminal(
+            "printf 'step one\\n'; printf '\\033[1A\\033[1G\\033[2K'; printf 'step two\\n'"
+        )
+        // Compared against the whole screen, not with `contains`: the first attempt
+        // asserted !contains("0%") against a screen reading "100%", which contains it.
+        let barOK = bar.screen == "step two"
+        line(barOK, barOK ? "progress bar redraws in place" : "progress bar did NOT overwrite: \(bar.screen.debugDescription)")
+        if !barOK { ok = false }
+
+        if !exitStatus() { ok = false }
         if !hazards() { ok = false }
-        if !outputBuffer() { ok = false }
 
         return ok ? 0 : 1
     }
 
-    /// The output buffer, as a table.
+    /// Exit-status decoding, as a table.
     ///
-    /// Added after a progress bar arrived as a dozen bars side by side: Symfony
-    /// Console redraws with cursor moves rather than a carriage return, and those were
-    /// being dropped as if they were colour codes. A screenshot was the only thing
-    /// that noticed, which is not a way to find out.
-    private static func outputBuffer() -> Bool {
-        let escape = "\u{1B}"
-        let cases: [(name: String, input: String, expected: String)] = [
-            ("plain lines", "one\ntwo\n", "one\ntwo"),
-            ("carriage return rewrites", "50%\r100%", "100%"),
-            ("colours stripped", "\(escape)[32mgreen\(escape)[0m", "green"),
-            // The shape Symfony's ProgressBar emits: up, to column 1, erase, redraw.
-            ("progress bar redraw", "0%\n\(escape)[1A\(escape)[1G\(escape)[2K50%\n", "50%"),
-            ("erase in line alone", "stale\(escape)[2Kfresh", "fresh"),
-            ("clear screen", "gone\n\(escape)[2Jhere", "here"),
-            ("backspace", "abcx\u{08}", "abc"),
-            ("osc title ignored", "\(escape)]0;a title\u{07}body", "body"),
+    /// Pinned because `exit 3` arrived as 768 and would have been learned as the exit
+    /// code — the daemon accepts anything up to 4096, so nothing downstream would have
+    /// objected.
+    private static func exitStatus() -> Bool {
+        let cases: [(reported: Int32, expected: Int32, why: String)] = [
+            (0, 0, "success"),
+            (3, 3, "already decoded"),
+            (127, 127, "command not found, already decoded"),
+            (768, 3, "raw status for exit 3"),
+            (256, 1, "raw status for exit 1"),
+            (0xFF00, 255, "raw status for exit 255"),
+            (9, 9, "small value stays a code, not SIGKILL"),
+            (SIGTERM, SIGTERM, "small value stays a code, not a signal"),
+            (0x8000 + 15, 143, "raw status, killed by SIGTERM"),
         ]
-
         var wrong: [String] = []
-        for probe in cases {
-            var buffer = OutputBuffer()
-            buffer.append(probe.input)
-            buffer.finish()
-            if buffer.text != probe.expected {
-                wrong.append("\(probe.name): got \(buffer.text.debugDescription), want \(probe.expected.debugDescription)")
-            }
+        for probe in cases where ExitStatus.normalise(probe.reported) != probe.expected {
+            wrong.append("\(probe.reported) -> \(ExitStatus.normalise(probe.reported)), want \(probe.expected) (\(probe.why))")
         }
-        line(wrong.isEmpty, "output buffer: \(cases.count - wrong.count)/\(cases.count) as expected")
+        line(wrong.isEmpty, "exit status: \(cases.count - wrong.count)/\(cases.count) as expected")
         for problem in wrong { print("        \(problem)") }
         return wrong.isEmpty
     }
@@ -210,12 +218,16 @@ enum Check {
         let marker = "echo tabcat-selftest-\(Int(Date().timeIntervalSince1970))"
         let cwd = FileManager.default.homeDirectoryForCurrentUser.path
 
-        let result = await runInPTY(marker)
-        line(result.code == 0, "ran: exit \(result.code)")
+        let result = await runInTerminal(marker)
+        line(result.code == 0, "ran: exit \(result.code.map(String.init) ?? "unknown")")
+        guard let exitCode = result.code else {
+            line(false, "no exit code, so there is nothing honest to learn")
+            return 1
+        }
 
         do {
             _ = try await client.request(op: "learn", fields: [
-                String(result.code), String(Int(Date().timeIntervalSince1970 * 1000)), cwd, marker,
+                String(exitCode), String(Int(Date().timeIntervalSince1970 * 1000)), cwd, marker,
             ])
             line(true, "learn accepted")
         } catch {
@@ -246,32 +258,49 @@ enum Check {
 
     /// Collects the output on the delivery queue, so nothing is mutated from two
     /// places at once.
-    private final class Collector {
-        var buffer = OutputBuffer()
+    /// Keeps the terminal alive for the duration of the call — a local that went out of
+    /// scope would take its process with it.
+    private final class Box {
+        var terminal: HeadlessTerminal?
     }
 
-    private static func runInPTY(_ command: String) async -> (output: String, code: Int32) {
+    /// Runs a command through a real terminal with no view attached, and returns what
+    /// the emulated screen ended up showing.
+    ///
+    /// `HeadlessTerminal` is the same emulator the cards use, which is what makes this
+    /// worth running: it tests our spawning and the screen we would show, not a
+    /// hand-rolled parser that no longer exists.
+    private static func runInTerminal(_ command: String) async -> (screen: String, code: Int32?) {
         // NOT the main queue: this path runs without an NSApplication, so nothing
         // would ever drain it and the callbacks would never arrive.
         let queue = DispatchQueue(label: "nl.d3vpunk.tabcat.gui.check")
-        let collector = Collector()
-        let pty = PTYProcess()
+        let box = Box()
 
-        return await withCheckedContinuation { continuation in
-            let started = pty.spawn(
-                command: command,
-                cwd: FileManager.default.homeDirectoryForCurrentUser.path,
-                deliverOn: queue,
-                onOutput: { collector.buffer.append($0) },
-                onExit: { code in
-                    collector.buffer.finish()
-                    continuation.resume(returning: (collector.buffer.text, code))
-                }
-            )
-            if !started {
-                continuation.resume(returning: ("could not open a pseudo terminal", -1))
+        let code: Int32? = await withCheckedContinuation { continuation in
+            let terminal = HeadlessTerminal(queue: queue) { exitCode in
+                continuation.resume(returning: exitCode)
             }
+            box.terminal = terminal
+            var environment = ProcessInfo.processInfo.environment
+            environment["TABCAT_PLUGIN_NO_SETUP"] = "1"
+            environment["TERM"] = "xterm-256color"
+            terminal.process.startProcess(
+                executable: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh",
+                args: ["-ic", command],
+                environment: environment.map { "\($0.key)=\($0.value)" },
+                currentDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+            )
         }
+
+        // Normalised here too, not only in Run: a diagnostic that reports something
+        // other than what the app would report is worse than no diagnostic.
+        let normalised = code.map(ExitStatus.normalise)
+        guard let terminal = box.terminal?.terminal else { return ("", normalised) }
+        let screen = (0..<terminal.rows)
+            .compactMap { terminal.getLine(row: $0)?.translateToString(trimRight: true) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (screen, normalised)
     }
 
     private static func line(_ good: Bool, _ text: String) {

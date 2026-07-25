@@ -1,4 +1,16 @@
+import SwiftTerm
 import SwiftUI
+
+/// Hands out the run's terminal without ever creating a new one.
+///
+/// The view is deliberately dumb: SwiftUI may rebuild it at will, and a terminal
+/// created here would restart the command each time.
+struct TerminalPane: NSViewRepresentable {
+    let terminal: LocalProcessTerminalView
+
+    func makeNSView(context: Context) -> LocalProcessTerminalView { terminal }
+    func updateNSView(_ view: LocalProcessTerminalView, context: Context) {}
+}
 
 /// One command, either in front with its output or shrunk to a badge in the rail.
 ///
@@ -57,22 +69,15 @@ struct RunCard: View {
         .font(.system(size: 9))
     }
 
+    /// A real terminal, so cursor addressing, scroll regions and the alternate screen
+    /// work — the hand-rolled line buffer this replaces already failed on an ordinary
+    /// Symfony progress bar.
+    ///
+    /// Rendered only in front, never in the badge: an NSView inside a shrinking card
+    /// would recompute its character grid on every animation frame, and the badge
+    /// shows nothing but the command line anyway.
     private var output: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                Text(run.output.isEmpty ? " " : run.output)
-                    .font(Typeface.small(11))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .id("end")
-            }
-            // Fades at the edge instead of cutting text off mid-glyph.
-            .scrollEdgeEffectStyle(.soft, for: .vertical)
-            .onChange(of: run.output) {
-                // Follow the tail: a command's last lines are the ones worth seeing,
-                // and scrolling by hand while output streams is hopeless.
-                proxy.scrollTo("end", anchor: .bottom)
-            }
-        }
+        TerminalPane(terminal: run.terminal)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

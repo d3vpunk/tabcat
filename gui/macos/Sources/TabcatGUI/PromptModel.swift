@@ -273,14 +273,21 @@ final class PromptModel: ObservableObject {
         }
         run.start { [weak self] code in
             guard let self else { return }
-            self.report(line: command, cwd: cwd, exitCode: code)
+            if let code {
+                self.report(line: command, cwd: cwd, exitCode: code)
+            } else {
+                // The command ran but the terminal could not tell us how it ended.
+                // Reporting 0 would teach the model it succeeded, which is a guess
+                // dressed as a fact — better to learn nothing.
+                self.status = "exit code unknown, not learned"
+            }
             self.autoDismiss(run, code: code)
         }
     }
 
     /// A clean run gets out of the way by itself; a failure stays, because an error
     /// nobody saw is the same as no error report at all.
-    private func autoDismiss(_ run: Run, code: Int32) {
+    private func autoDismiss(_ run: Run, code: Int32?) {
         guard code == 0 else { return }
         Task {
             try? await Task.sleep(for: .seconds(4))
