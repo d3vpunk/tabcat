@@ -39,6 +39,9 @@ export interface HostStats {
   names: number;
   historyFile: string;
   historyWritable: boolean;
+  /** Full model rebuilds so far. Observable on purpose: a rebuild costs O(all
+   *  entries) and must stay rare — see the tail-follow contract. */
+  rebuilds: number;
 }
 
 const READ_CHUNK = 64 * 1024;
@@ -75,6 +78,7 @@ export class EngineHost {
    */
   private recent: string[] = [];
   private recentSeen = new Set<string>();
+  private rebuilds = 0;
 
   constructor(private readonly options: EngineHostOptions) {
     this.namesFile = namesFileFor(options.historyFile);
@@ -221,8 +225,11 @@ export class EngineHost {
       this.options.onWarn?.(`compaction skipped: ${messageOf(error)}`);
       return;
     }
-    // Our own compaction replaced the file — the offset and inode are stale.
-    this.loadAll();
+    // refresh(), not loadAll(): compactHistory only rewrites the file when the
+    // cap is exceeded, which is rare. Its rename changes the inode, so a real
+    // compaction still triggers the rebuild — a no-op stays a no-op instead of
+    // freezing every shell's completion every six hours.
+    this.refresh();
   }
 
   stats(): HostStats {
@@ -232,6 +239,7 @@ export class EngineHost {
       names: this.nameIndex.all().length,
       historyFile: this.options.historyFile,
       historyWritable: this.historyWritable,
+      rebuilds: this.rebuilds,
     };
   }
 
@@ -242,6 +250,7 @@ export class EngineHost {
    * never twice.
    */
   private loadAll(): void {
+    this.rebuilds++;
     const stats = statOrNull(this.options.historyFile);
     this.decoder = new StringDecoder('utf8');
     this.partial = '';
@@ -297,7 +306,10 @@ export class EngineHost {
       // a path stat and the open would have us read the NEW file from an offset
       // that belonged to the old one.
       const stats = fstatSync(fd);
-      if (stats.ino !== this.ino || stats.size < this.offset || !this.offsetLooksSane(fd)) {
+      // The newline probe only applies when nothing is buffered: with a partial
+      // trailing fragment the offset legitimately sits mid-line, and probing it
+      // would force a full rebuild on every request until the writer is done.
+      if (stats.ino !== this.ino || stats.size < this.offset || (this.partial === '' && !this.offsetLooksSane(fd))) {
         this.loadAll();
         return;
       }

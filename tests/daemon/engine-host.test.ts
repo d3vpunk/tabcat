@@ -129,6 +129,23 @@ describe('EngineHost: tail follow', () => {
     expect(inserts(engine, 'echo ')).toContain('ä-marker');
   });
 
+  it('does not rebuild while a writer sits mid-append', () => {
+    // The offset legitimately points into an unterminated line then. Probing it
+    // for a newline made every request from every shell rebuild the whole model
+    // (measured: 4 rebuilds across 5 requests) until the writer finished.
+    write([entry('git status')]);
+    const engine = host();
+    const base = engine.stats().rebuilds;
+    const pending = JSON.stringify(entry('deploy production'));
+    appendFileSync(historyFile, pending.slice(0, 20));
+    for (let i = 0; i < 5; i++) inserts(engine, 'g');
+    expect(engine.stats().rebuilds).toBe(base);
+
+    appendFileSync(historyFile, `${pending.slice(20)}\n`);
+    expect(inserts(engine, 'deploy ')).toContain('production');
+    expect(engine.stats().rebuilds).toBe(base);
+  });
+
   it('rebuilds when another process compacted the file (inode changed)', () => {
     write([entry('git status'), entry('npm run build')]);
     const engine = host();
@@ -274,14 +291,28 @@ describe('EngineHost: compaction', () => {
     expect(inserts(engine, 'cmd-19')).not.toEqual([]);
   });
 
+  it('does not rebuild when compaction had nothing to do', () => {
+    // compactHistory only rewrites the file above the cap. Rebuilding anyway
+    // froze every connected shell every six hours for nothing.
+    write([entry('git status'), entry('npm test', { ts: 1_700_000_000_001 })]);
+    const engine = host({ maxEntries: 100 });
+    const base = engine.stats().rebuilds;
+    engine.compact();
+    expect(engine.stats().rebuilds).toBe(base);
+    expect(inserts(engine, 'git ')).toContain('status');
+  });
+
   it('re-reads its own compaction so the offset stays valid', () => {
     write([entry('git status')]);
     const engine = host({ maxEntries: 2 });
     engine.learn(entry('npm test'));
     engine.learn(entry('cargo build'));
+    const before = engine.stats().rebuilds;
     engine.compact();
     expect(readFileSync(historyFile, 'utf8').trim().split('\n')).toHaveLength(2);
     expect(engine.stats().entries).toBe(2);
+    // A real compaction renames the file, so the inode check rebuilds.
+    expect(engine.stats().rebuilds).toBeGreaterThan(before);
 
     // The offset must point into the compacted file, not the old one.
     engine.learn(entry('ls -la'));
