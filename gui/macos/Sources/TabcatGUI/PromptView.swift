@@ -123,14 +123,9 @@ struct PromptView: View {
             model.clear()
             return .handled
         }
-        // ⌘1…⌘9 jump straight to a chip. Command rather than Option, because
-        // ⌥-digit produces a character the field would otherwise insert.
-        .onKeyPress(keys: Set((1...9).map { KeyEquivalent(Character(String($0))) })) { press in
-            guard press.modifiers.contains(.command),
-                  let digit = press.characters.first.flatMap({ Int(String($0)) })
-            else { return .ignored }
-            return model.select(digit: digit) ? .handled : .ignored
-        }
+        // ⌘1…⌘9 are NOT handled here: Command combinations go to the menu bar as
+        // key equivalents before the responder chain, so the Controller's local
+        // event monitor claims them instead — that runs ahead of both.
     }
 
     private var footer: some View {

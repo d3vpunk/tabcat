@@ -82,6 +82,17 @@ final class Controller {
                 }
                 return event
             case .keyDown:
+                // ⌘1…⌘9 jump straight to a chip. Handled here rather than with
+                // onKeyPress in the view because Command combinations are offered
+                // to the menu bar as key equivalents BEFORE the responder chain
+                // sees them. This app has no menu bar, so they would probably
+                // arrive anyway — but a local monitor runs ahead of both, so there
+                // is nothing left to probably.
+                if event.modifierFlags.contains(.command),
+                   let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
+                   digit >= 1, digit <= 9 {
+                    return self.model.select(digit: digit) ? nil : event
+                }
                 // While ⌥ is held, the arrows walk the chip row instead of moving
                 // the caret. No mode flag needed beyond `cycling`: the modifier is
                 // part of the event.
