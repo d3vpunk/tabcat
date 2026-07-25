@@ -34,6 +34,28 @@ export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env, uid: num
 }
 
 /**
+ * The socket a client should connect to — the question every front end asks,
+ * and the one `tabcat daemon path` answers for the ones that cannot import this
+ * file. Pure computation: it neither creates the directory nor checks whether
+ * anything is listening.
+ *
+ * Mirrors the precedence in `_tabcat_setup` (zsh plugin): an explicit override
+ * wins, then $TABCAT_SOCKET, then the computed default. An empty $TABCAT_SOCKET
+ * counts as unset — that is what `: ${TABCAT_SOCKET:=}` leaves behind in every
+ * shell that never set it.
+ */
+export function resolveSocketPath(
+  override: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  uid: number = currentUid(),
+): string {
+  if (override !== undefined) return override;
+  const fromEnv = env['TABCAT_SOCKET'];
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
+  return defaultSocketPath(env, uid);
+}
+
+/**
  * Pidfile next to history.jsonl — same directory tabcat already owns and
  * creates with 0700 (`store.ts`). Unlike the socket it is an ordinary file,
  * so a home directory is fine.

@@ -277,7 +277,10 @@ describe.skipIf(!zsh)('plugin cold start', () => {
     const cliPath = fileURLToPath(new URL('../../src/cli.ts', import.meta.url));
     writeFileSync(
       path,
-      `#!/bin/sh\nexec npx tsx ${cliPath} "$@" --history ${historyFile} --socket ${socketPath}\n`,
+      // Only --history is injected: the socket now comes from the plugin, which
+      // passes --socket explicitly. Forcing it here too would hide whether that
+      // path works and would make the CLI reject the duplicate option.
+      `#!/bin/sh\nexec npx tsx ${cliPath} "$@" --history ${historyFile}\n`,
       { mode: 0o755 },
     );
     return path;

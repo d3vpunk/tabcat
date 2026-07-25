@@ -9,7 +9,7 @@ import { namesFileFor, readNames } from './engine/names-store.js';
 import { MAX_HISTORY_ENTRIES, appendHistory, dedupeImportEntries, defaultHistoryFile, readHistory } from './engine/store.js';
 import { AlreadyRunningError, startDaemon } from './daemon/server.js';
 import { pingDaemon, shutdownDaemon } from './daemon/client.js';
-import { SocketPathError, defaultSocketPath } from './daemon/paths.js';
+import { SocketPathError, resolveSocketPath } from './daemon/paths.js';
 import { PROTOCOL_VERSION } from './daemon/protocol.js';
 import { checkEnvironment, defaultCheckDeps, formatCheck, initSnippet, pluginFilePath } from './plugin/init.js';
 import { realFs } from './repl/real-fs.js';
@@ -33,7 +33,7 @@ Commands:
   simulate        Show ranking for a line: --line <str> [--cwd <dir>] [--now <ms>] [--json]
   stats           History overview (entries, directories)
   names           List magic names (Ctrl-N shortcuts from the REPL)
-  daemon          Run the prediction daemon for the zsh plugin (status|stop)
+  daemon          Run the prediction daemon for the zsh plugin (status|stop|path)
   plugin init zsh Print the .zshrc snippet for the zsh plugin [--check]
   help            This help
 
@@ -160,8 +160,16 @@ switch (args.command) {
 
   case 'daemon': {
     const historyFile = args.history ?? defaultHistoryFile();
-    const socketPath = args.socket ?? defaultSocketPath();
+    const socketPath = resolveSocketPath(args.socket);
     const sub = args.subs[0];
+
+    // Exists so other front ends (the macOS overlay, any script) do not have to
+    // reimplement the sun_path rule a third time — the zsh plugin already
+    // mirrors it. Pure output: no daemon contact, no directory created.
+    if (sub === 'path') {
+      console.log(socketPath);
+      break;
+    }
 
     if (sub === 'status') {
       const info = await pingDaemon(socketPath, 1_000);

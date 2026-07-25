@@ -22,10 +22,13 @@ interface CliResult {
 }
 
 /** Runs the real CLI through tsx — the same entry point users get as `tabcat`. */
-function cli(args: readonly string[], options: { detached?: boolean } = {}): Promise<CliResult> {
+function cli(
+  args: readonly string[],
+  options: { detached?: boolean; env?: Record<string, string> } = {},
+): Promise<CliResult> {
   const child = spawn('npx', ['tsx', CLI, ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, TABCAT_MAGIC_NAMES: '1' },
+    env: { ...process.env, TABCAT_MAGIC_NAMES: '1', ...options.env },
   });
   children.push(child);
   let stdout = '';
@@ -66,6 +69,7 @@ describe('cli args: daemon and plugin', () => {
     expect(parseCliArgs(['daemon'])).toMatchObject({ command: 'daemon', subs: [] });
     expect(parseCliArgs(['daemon', 'status'])).toMatchObject({ command: 'daemon', subs: ['status'] });
     expect(parseCliArgs(['daemon', 'stop'])).toMatchObject({ command: 'daemon', subs: ['stop'] });
+    expect(parseCliArgs(['daemon', 'path'])).toMatchObject({ command: 'daemon', subs: ['path'] });
     expect(parseCliArgs(['daemon', '--socket', '/tmp/x.sock'])).toMatchObject({ socket: '/tmp/x.sock' });
   });
 
@@ -107,6 +111,43 @@ describe('cli: plugin init zsh', () => {
     expect(result.stdout).toContain('zsh/net/socket');
     expect(result.stdout).toContain('socket path');
   });
+});
+
+describe('cli: daemon path', () => {
+  // The macOS overlay reads this instead of reimplementing the sun_path rule, so
+  // the contract is narrow on purpose: one line, no side effects, no daemon.
+  it('prints exactly one line and exits zero without a daemon', async () => {
+    const result = await cli(['daemon', 'path']);
+    expect(result.status).toBe(0);
+    expect(result.stdout.split('\n').filter((line) => line !== '')).toHaveLength(1);
+    expect(result.stdout.trim()).toMatch(/\/daemon\.sock$/);
+  }, 60_000);
+
+  it('does not create the socket directory', async () => {
+    const unborn = join(socketDir, 'nested', 'd.sock');
+    const result = await cli(['daemon', 'path', '--socket', unborn]);
+    expect(result.stdout.trim()).toBe(unborn);
+    expect(existsSync(join(socketDir, 'nested'))).toBe(false);
+  }, 60_000);
+
+  it('respects $TABCAT_SOCKET, and lets --socket win over it', async () => {
+    const fromEnv = await cli(['daemon', 'path'], { env: { TABCAT_SOCKET: socketPath } });
+    expect(fromEnv.stdout.trim()).toBe(socketPath);
+
+    const flagWins = await cli(['daemon', 'path', '--socket', '/tmp/flag.sock'], {
+      env: { TABCAT_SOCKET: socketPath },
+    });
+    expect(flagWins.stdout.trim()).toBe('/tmp/flag.sock');
+  }, 60_000);
+
+  it('finds the daemon that $TABCAT_SOCKET points at', async () => {
+    // The regression this guards: status used to compute the default path and
+    // report "not running" for a daemon the plugin had started elsewhere.
+    await cli(['daemon', '--socket', socketPath, '--history', historyFile], { detached: true });
+    const status = await cli(['daemon', 'status'], { env: { TABCAT_SOCKET: socketPath } });
+    expect(status.status).toBe(0);
+    expect(status.stdout).toContain('running: version');
+  }, 60_000);
 });
 
 describe('cli: daemon lifecycle', () => {

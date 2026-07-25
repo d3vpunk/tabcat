@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { MAX_SOCKET_PATH, defaultSocketPath, socketPathLength } from '../daemon/paths.js';
+import { MAX_SOCKET_PATH, resolveSocketPath, socketPathLength } from '../daemon/paths.js';
 import { VERSION } from '../version.js';
 
 export const MIN_NODE_MAJOR = 20;
@@ -113,7 +113,9 @@ export function checkEnvironment(deps: CheckDeps): CheckResult {
     }
   }
 
-  const socketPath = defaultSocketPath(deps.env);
+  // The effective path, not the computed default: with $TABCAT_SOCKET set, the
+  // check would otherwise report a socket nobody uses.
+  const socketPath = resolveSocketPath(undefined, deps.env);
   const socketBytes = socketPathLength(socketPath);
   lines.push(
     check(

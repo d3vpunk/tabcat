@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { escapeField, unescapeField } from '../../src/daemon/protocol.js';
-import { defaultSocketPath } from '../../src/daemon/paths.js';
+import { defaultSocketPath, resolveSocketPath } from '../../src/daemon/paths.js';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { ROW, hasZsh, runZsh, splitRows, withPlugin } from './harness.js';
@@ -140,5 +140,43 @@ describe.skipIf(!zsh)('plugin wire parity: socket path', () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+// Not just the computed default: the plugin and the CLI have to agree on the
+// FULL precedence, or a shell with $TABCAT_SOCKET set connects to one socket
+// while `tabcat daemon status` inspects another.
+describe.skipIf(!zsh)('plugin wire parity: effective socket', () => {
+  const effectiveFromZsh = (env: Record<string, string>): string =>
+    runZsh(withPlugin('_tabcat_effective_socket\nprint -r -- $REPLY'), { env }).stdout.trim();
+
+  it('agrees when $TABCAT_SOCKET is set', () => {
+    const env = { TABCAT_SOCKET: '/tmp/tc-env.sock' };
+    expect(effectiveFromZsh(env)).toBe(resolveSocketPath(undefined, env, process.getuid?.() ?? 0));
+    expect(effectiveFromZsh(env)).toBe('/tmp/tc-env.sock');
+  });
+
+  it('agrees that an empty $TABCAT_SOCKET means unset', () => {
+    // The state `: ${TABCAT_SOCKET:=}` leaves behind in every ordinary shell.
+    const env = { TABCAT_SOCKET: '' };
+    expect(effectiveFromZsh(env)).toBe(resolveSocketPath(undefined, env, process.getuid?.() ?? 0));
+  });
+
+  it('agrees on the computed default when nothing is set', () => {
+    const dir = mkdtempSync('/tmp/tc-eff-');
+    try {
+      const env = { XDG_RUNTIME_DIR: dir };
+      expect(effectiveFromZsh(env)).toBe(resolveSocketPath(undefined, env, process.getuid?.() ?? 0));
+      expect(effectiveFromZsh(env)).toBe(join(dir, 'tabcat', 'daemon.sock'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not leak REPLY into the caller', () => {
+    // The plugin runs this inside the user's shell; a stray global REPLY would
+    // show up in unrelated scripts.
+    const script = withPlugin('_tabcat_setup >/dev/null 2>&1\nprint -r -- "leak=${REPLY:-none}"');
+    expect(runZsh(script, { env: { TABCAT_SOCKET: '/tmp/tc-leak.sock' } }).stdout).toContain('leak=none');
   });
 });

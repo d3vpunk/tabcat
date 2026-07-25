@@ -199,7 +199,13 @@ shell and asks it per keystroke.
 tabcat daemon          # run in the foreground (the plugin starts it on demand)
 tabcat daemon status   # version, protocol, state, pid
 tabcat daemon stop
+tabcat daemon path     # the socket this shell's clients connect to
 ```
+
+`daemon path` exists so a front end that cannot import the TypeScript — a script,
+or a GUI in another language — does not have to reimplement the `sun_path` rule a
+third time. It prints one line and touches nothing: `--socket` wins, then
+`$TABCAT_SOCKET`, then the computed default.
 
 Measured on macOS/zsh 5.9: **0.027 ms** per request over the persistent fd,
 versus ~6 ms for a `nc -U` fork per keystroke and ~110 ms for a Node cold start
@@ -229,9 +235,9 @@ fall back to plain zsh behaviour. The shell never hangs on tabcat.
 | `tabcat stats` | History overview (entries, directories) |
 | `tabcat names` | List magic names (`Ctrl+N` in the REPL, `^Xl` in the plugin) |
 | `tabcat plugin init zsh [--check]` | Print the `.zshrc` snippet for the zsh plugin, or run the preflight check |
-| `tabcat daemon [status\|stop]` | Prediction daemon for the zsh plugin |
+| `tabcat daemon [status\|stop\|path]` | Prediction daemon for the zsh plugin; `path` prints the socket clients connect to |
 | `tabcat --history <path>` | Use an alternative history file (default: `~/.config/tabcat/history.jsonl`) |
-| `tabcat daemon --socket <path>` | Use an alternative daemon socket (default: `$XDG_RUNTIME_DIR/tabcat/daemon.sock`, fallback `/tmp/tabcat-<uid>/daemon.sock`) |
+| `tabcat daemon --socket <path>` | Use an alternative daemon socket (default: `$TABCAT_SOCKET`, else `$XDG_RUNTIME_DIR/tabcat/daemon.sock`, fallback `/tmp/tabcat-<uid>/daemon.sock`) |
 
 ## Tuning the algorithm
 

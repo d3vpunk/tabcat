@@ -41,7 +41,7 @@ const ALLOWED_OPTIONS: Record<DataCommand, ReadonlySet<string>> = {
 
 /** Which positional words each command accepts after its own name. */
 const ALLOWED_SUBS: Partial<Record<DataCommand, readonly (readonly string[])[]>> = {
-  daemon: [[], ['status'], ['stop']],
+  daemon: [[], ['status'], ['stop'], ['path']],
   plugin: [['init'], ['init', 'zsh']],
 };
 
@@ -174,7 +174,7 @@ export function commandUsage(command: CliCommand): string {
     case 'names':
       return 'Usage: tabcat names [--history <path>]';
     case 'daemon':
-      return 'Usage: tabcat daemon [status|stop] [--history <path>] [--socket <path>]';
+      return 'Usage: tabcat daemon [status|stop|path] [--history <path>] [--socket <path>]';
     case 'plugin':
       return 'Usage: tabcat plugin init zsh [--check]';
     case 'help':

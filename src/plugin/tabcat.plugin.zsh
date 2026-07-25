@@ -178,6 +178,17 @@ _tabcat_socket_path() {
   REPLY=$dir/daemon.sock
 }
 
+# The socket this shell actually talks to. Mirrors resolveSocketPath() in
+# paths.ts — pinned by a parity test, so the CLI and the plugin cannot drift
+# into pointing at two different sockets.
+_tabcat_effective_socket() {
+  if [[ -n ${TABCAT_SOCKET:-} ]]; then
+    REPLY=$TABCAT_SOCKET
+    return 0
+  fi
+  _tabcat_socket_path
+}
+
 _tabcat_disable() {
   (( _TABCAT_OFF )) && return 0
   _TABCAT_OFF=1
@@ -284,12 +295,16 @@ _tabcat_release_spawn_lock() {
 # nohup and `&!`: the daemon outlives the shell that started it. Without an
 # ignored SIGHUP it dies with the terminal that happened to spawn it — and it
 # cannot install its own handler during Node's startup.
+#
+# --socket is passed explicitly rather than left to environment inheritance: we
+# already resolved the path, and a TABCAT_SOCKET that was set without `export`
+# would otherwise have us connect to one path while the daemon binds another.
 _tabcat_launch() {
   _TABCAT_SPAWN_AT=${EPOCHREALTIME:-0}
   if (( $+commands[nohup] )); then
-    ( nohup ${TABCAT_BIN} daemon </dev/null >/dev/null 2>&1 &! )
+    ( nohup ${TABCAT_BIN} daemon --socket $_TABCAT_SOCKET </dev/null >/dev/null 2>&1 &! )
   else
-    ( ${TABCAT_BIN} daemon </dev/null >/dev/null 2>&1 &! )
+    ( ${TABCAT_BIN} daemon --socket $_TABCAT_SOCKET </dev/null >/dev/null 2>&1 &! )
   fi
 }
 
@@ -997,13 +1012,9 @@ _tabcat_report_conflicts() {
 # ---------------------------------------------------------------------------
 
 _tabcat_setup() {
-  if [[ -n $TABCAT_SOCKET ]]; then
-    _TABCAT_SOCKET=$TABCAT_SOCKET
-  else
-    local REPLY
-    _tabcat_socket_path
-    _TABCAT_SOCKET=$REPLY
-  fi
+  local REPLY
+  _tabcat_effective_socket
+  _TABCAT_SOCKET=$REPLY
 
   _tabcat_report_conflicts || return 1
 

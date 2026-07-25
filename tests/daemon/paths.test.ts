@@ -1,7 +1,14 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_SOCKET_PATH, SocketPathError, defaultSocketPath, ensureSocketDir, pidfileFor } from '../../src/daemon/paths.js';
+import {
+  MAX_SOCKET_PATH,
+  SocketPathError,
+  defaultSocketPath,
+  ensureSocketDir,
+  pidfileFor,
+  resolveSocketPath,
+} from '../../src/daemon/paths.js';
 
 let base: string;
 
@@ -35,6 +42,28 @@ describe('daemon paths: socket location', () => {
 
   it('puts the pidfile next to the history file', () => {
     expect(pidfileFor('/home/x/.config/tabcat/history.jsonl')).toBe('/home/x/.config/tabcat/daemon.pid');
+  });
+});
+
+describe('daemon paths: effective socket', () => {
+  it('prefers an explicit override over everything', () => {
+    const env = { TABCAT_SOCKET: '/tmp/env.sock', XDG_RUNTIME_DIR: base };
+    expect(resolveSocketPath('/tmp/flag.sock', env, 501)).toBe('/tmp/flag.sock');
+  });
+
+  it('falls back to $TABCAT_SOCKET before the computed default', () => {
+    const env = { TABCAT_SOCKET: '/tmp/env.sock', XDG_RUNTIME_DIR: base };
+    expect(resolveSocketPath(undefined, env, 501)).toBe('/tmp/env.sock');
+  });
+
+  it('treats an empty $TABCAT_SOCKET as unset', () => {
+    // `: ${TABCAT_SOCKET:=}` in the plugin leaves exactly this in every shell
+    // that never set the variable.
+    expect(resolveSocketPath(undefined, { TABCAT_SOCKET: '' }, 501)).toBe('/tmp/tabcat-501/daemon.sock');
+  });
+
+  it('computes the default when nothing is configured', () => {
+    expect(resolveSocketPath(undefined, { XDG_RUNTIME_DIR: base }, 501)).toBe(join(base, 'tabcat', 'daemon.sock'));
   });
 });
 
