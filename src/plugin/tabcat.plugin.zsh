@@ -44,7 +44,16 @@ autoload -Uz add-zsh-hook read-from-minibuffer
 : ${TABCAT_KEY_QUERY:='^Xq'}
 : ${TABCAT_KEY_MENU:='^Xv'}
 : ${TABCAT_GHOST:=1}
-: ${TABCAT_GHOST_STYLE:='fg=8'}
+# fg=8 is the dim grey every 256-colour terminal has. On an 8-colour TERM zsh
+# silently drops it and the ghost renders like typed text — underline keeps it
+# distinguishable there. An explicit setting always wins.
+if (( ! ${+TABCAT_GHOST_STYLE} )); then
+  if (( ${+terminfo} )) && (( ${terminfo[colors]:-256} < 16 )); then
+    TABCAT_GHOST_STYLE='underline'
+  else
+    TABCAT_GHOST_STYLE='fg=8'
+  fi
+fi
 : ${TABCAT_BADGE:=1}
 : ${TABCAT_MENU_LIMIT:=10}
 : ${TABCAT_SEARCH_LIMIT:=10}
@@ -357,9 +366,20 @@ _tabcat_header_handle() {
 # Ghost text
 # ---------------------------------------------------------------------------
 
+# Removes only OUR highlight entries. zle keeps region_highlight across widget
+# calls, so appending one per keystroke would grow the array for the whole line
+# and leave stale lengths behind once the ghost changes or disappears.
+# Buffer-relative entries (zsh-syntax-highlighting) never start with 'P', and
+# zsh-autosuggestions — the other POSTDISPLAY user — is refused at load.
+_tabcat_clear_highlight() {
+  (( ${#region_highlight} )) && region_highlight=("${(@)region_highlight:#P0 *}")
+  return 0
+}
+
 _tabcat_clear_ghost() {
   POSTDISPLAY=''
   _TABCAT_GHOST_TEXT=''
+  _tabcat_clear_highlight
 }
 
 # POSTDISPLAY can only append — it cannot rewrite characters already on screen.
@@ -431,6 +451,16 @@ _tabcat_push_undo() {
 # ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
+
+# The buffer as a single word, or '' when it holds none or several. Uses (z)
+# splitting on purpose: `${BUFFER##[[:space:]]##}` silently strips nothing
+# without `setopt extended_glob`, which most users do not have set.
+_tabcat_lone_word() {
+  local -a words=(${(z)BUFFER})
+  REPLY=''
+  (( ${#words} == 1 )) && REPLY=${words[1]}
+  return 0
+}
 
 # Replaces `replace` characters left of the cursor with `text`.
 _tabcat_apply() {
@@ -508,10 +538,11 @@ tabcat-undo-accept() {
 # widget — preexec runs after the command line is fixed and cannot rewrite it.
 tabcat-accept-line() {
   _tabcat_clear_ghost
-  local candidate=${BUFFER##[[:space:]]##}
-  candidate=${candidate%%[[:space:]]##}
+  local REPLY
+  _tabcat_lone_word
+  local candidate=$REPLY
   if [[ $candidate =~ '^[a-z][a-z0-9]{2,15}$' ]]; then
-    local REPLY cwd handle
+    local cwd handle
     _tabcat_esc $PWD; cwd=$REPLY
     _tabcat_esc $candidate; handle=$REPLY
     if _tabcat_request names resolve $cwd $handle ''; then
@@ -554,8 +585,9 @@ tabcat-label() {
 tabcat-forget() {
   local target=$BUFFER
   local REPLY cwd
+  _tabcat_lone_word
+  local candidate=$REPLY
   _tabcat_esc $PWD; cwd=$REPLY
-  local candidate=${target//[[:space:]]/}
   # A handle in the buffer is forgotten by resolving it first — the tombstone
   # is keyed on the command line, not on the handle.
   if [[ $candidate =~ '^[a-z][a-z0-9]{2,15}$' ]]; then

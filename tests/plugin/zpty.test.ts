@@ -52,7 +52,7 @@ const probe = (): string[] =>
  * is what makes pty tests flaky — the redraw stream is full of cursor motions
  * that hide the very text one wants to match.
  */
-const prelude = (learn: boolean): string => `
+const prelude = (learn: boolean, term: string): string => `
 zmodload zsh/zpty || { print "NO-ZPTY"; exit 2 }
 zmodload zsh/datetime
 zmodload zsh/zselect
@@ -79,6 +79,20 @@ probe_count() {
 # Waits until the probe widget appended a line, instead of guessing how long a
 # round trip takes. Deadlines instead of fixed sleeps: fast when the machine is
 # idle, still correct when the CI box is loaded.
+press_highlight_probe() {
+  local before
+  probe_count; before=$PROBE_N
+  zpty -w -n tc $'\\C-Xh'
+  local -F deadline=$(( EPOCHREALTIME + 10 ))
+  while (( EPOCHREALTIME < deadline )); do
+    pump 0.05
+    probe_count
+    (( PROBE_N > before )) && return 0
+  done
+  print "HL-PROBE-TIMEOUT"
+  return 1
+}
+
 press_probe() {
   local before
   probe_count; before=$PROBE_N
@@ -114,11 +128,12 @@ wait_for_text() {
 }
 
 pty_start() {
-  zpty tc "TERM=xterm TABCAT_SOCKET=${socketPath}${learn ? '' : ' TABCAT_NO_LEARN=1'} zsh -f -i" || return 1
+  zpty tc "TERM=${term} TABCAT_SOCKET=${socketPath}${learn ? '' : ' TABCAT_NO_LEARN=1'} zsh -f -i" || return 1
   pump 0.5
   zpty -w tc "cd ${dir}"
   zpty -w tc "source ${PLUGIN_FILE}"
   zpty -w tc 'tabcat-probe() { print -r -- "buf=[$BUFFER] cur=$CURSOR post=[$POSTDISPLAY] off=$_TABCAT_OFF" >> ${probeFile} }; zle -N tabcat-probe; bindkey "^Xz" tabcat-probe'
+  zpty -w tc 'tabcat-probe-hl() { print -r -- "hl=$#region_highlight items=(\${(j:|:)region_highlight})" >> ${probeFile} }; zle -N tabcat-probe-hl; bindkey "^Xh" tabcat-probe-hl'
   # The probe widget must exist before any test relies on it.
   local -F deadline=$(( EPOCHREALTIME + 10 ))
   while (( EPOCHREALTIME < deadline )); do
@@ -136,8 +151,10 @@ type_keys() { zpty -w -n tc "$1"; pump \${2:-0.4} }
 press_enter() { zpty -w -n tc $'\\r'; pump \${1:-0.2} }
 `;
 
-const runPty = async (body: string, options: { learn?: boolean } = {}): Promise<string> => {
-  const result = await runZshAsync(`${prelude(options.learn === true)}\n${body}`, {
+const runPty = async (body: string, options: { learn?: boolean; term?: string } = {}): Promise<string> => {
+  const script = `${prelude(options.learn === true, options.term ?? 'xterm-256color')}\n${body}`;
+  if (process.env['TABCAT_DUMP_PTY_SCRIPT'] !== undefined) writeFileSync(process.env['TABCAT_DUMP_PTY_SCRIPT'], script);
+  const result = await runZshAsync(script, {
     cwd: dir,
     // Nothing may fall back to a daemon from the developer's PATH.
     env: { TABCAT_BIN: '/nonexistent/tabcat' },
@@ -287,6 +304,64 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
     expect(typed).toBe('buf=[cd doc] cur=6 post=[] off=0');
     // Tab still accepts the corrected spelling.
     expect(afterTab).toBe('buf=[cd Documents/] cur=13 post=[] off=0');
+  });
+
+  it('keeps exactly one highlight entry while typing, and none without a ghost', async () => {
+    // zle keeps region_highlight across widget calls: appending one entry per
+    // keystroke grew the array for the whole line and left stale lengths behind.
+    writeHistory(entry('echo highlight-me', 1_700_000_000_000), entry('echo highlight-me', 1_700_000_000_001));
+    await startRealDaemon();
+    await runPty(`
+      pty_start || exit 1
+      type_keys 'echo h'
+      press_highlight_probe
+      type_keys 'i'
+      type_keys 'g'
+      type_keys 'h'
+      press_highlight_probe
+      # Cursor away from the end: the ghost goes, its highlight must go with it.
+      type_keys $'\\e[D'
+      press_highlight_probe
+      zpty -d tc
+    `);
+    const [first, later, cleared] = probe();
+    // One entry, never a growing list.
+    expect(first).toContain('hl=1');
+    expect(later).toMatch(/^hl=1 items=\(P0 \d+ fg=8\)$/);
+    // Ghost gone -> its highlight gone, and nobody else's entries were touched.
+    expect(cleared).toBe('hl=0 items=()');
+  });
+
+  it('falls back to underline on a terminal without 256 colours', async () => {
+    // zsh silently drops fg=8 on an 8-colour TERM: the ghost would then render
+    // exactly like typed text, which is what makes it look like an overlap.
+    writeHistory(entry('echo dim-me', 1_700_000_000_000), entry('echo dim-me', 1_700_000_000_001));
+    await startRealDaemon();
+    await runPty(
+      `
+      pty_start || exit 1
+      type_keys 'echo d'
+      press_highlight_probe
+      zpty -d tc
+    `,
+      { term: 'xterm' },
+    );
+    expect(probe()[0]).toMatch(/^hl=1 items=\(P0 \d+ underline\)$/);
+  });
+
+  it('expands a magic name typed with surrounding whitespace', async () => {
+    // \`\${BUFFER##[[:space:]]##}\` strips nothing without extended_glob, so a
+    // handle typed with a leading or trailing space never resolved.
+    await startRealDaemon();
+    expect(daemon?.host.namesCreate('spc', 'touch spaced.marker', dir)).toEqual({ created: true });
+    await runPty(`
+      pty_start || exit 1
+      type_keys '  spc '
+      press_enter
+      wait_for_file ${dir}/spaced.marker
+      zpty -d tc
+    `);
+    expect(existsSync(join(dir, 'spaced.marker'))).toBe(true);
   });
 
   it('learns an executed command through the precmd hook', async () => {
