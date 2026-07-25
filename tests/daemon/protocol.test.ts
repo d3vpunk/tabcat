@@ -46,6 +46,33 @@ describe('protocol: field escaping', () => {
   });
 });
 
+describe('protocol: multibyte cursors', () => {
+  it('reads the cursor as code points, the way zsh counts', () => {
+    // zsh reports 3 characters for `a😀b`; the JS string is 4 UTF-16 units.
+    const parsed = parseRequest(predict('1', '3', '/x', 'a\u{1F600}b'));
+    expect(parsed.ok && parsed.request.op === 'predict' && parsed.request.cursor).toBe(4);
+  });
+
+  it('leaves a plain ASCII cursor untouched', () => {
+    const parsed = parseRequest(predict('1', '4', '/x', 'git commit'));
+    expect(parsed.ok && parsed.request.op === 'predict' && parsed.request.cursor).toBe(4);
+  });
+
+  it('clamps a cursor past the end', () => {
+    const parsed = parseRequest(predict('1', '99', '/x', 'a\u{1F600}b'));
+    expect(parsed.ok && parsed.request.op === 'predict' && parsed.request.cursor).toBe(4);
+  });
+});
+
+describe('protocol: framing safety', () => {
+  it('drops an all-empty row so it cannot terminate the block early', () => {
+    // An empty line IS the terminator: a row of empty fields would make the
+    // client attribute every later response to the wrong request.
+    expect(encodeMessage([['ok', 't1'], [''], ['ls -la']])).toBe('ok\tt1\nls -la\n\n');
+    expect(decodeMessage(encodeMessage([['ok', 't1'], ['', ''], ['x']]))).toEqual([['ok', 't1'], ['x']]);
+  });
+});
+
 describe('protocol: request parsing', () => {
   it('parses predict', () => {
     const parsed = parseRequest(predict('10', '7', '/home/x', 'git com'));
@@ -95,6 +122,7 @@ describe('protocol: request parsing', () => {
     ['empty cwd', predict('1', '0', '', 'ls'), 'bad_value'],
     ['blank learn line', request('learn', 'a1', '1', '0', '1', '/x', '   '), 'bad_value'],
     ['learn without timestamp', request('learn', 'a1', '1', '0', '0', '/x', 'ls'), 'bad_value'],
+    ['learn timestamp in microseconds', request('learn', 'a1', '1', '0', String(Date.now() * 1000), '/x', 'ls'), 'bad_value'],
     ['unknown names op', request('names', 'a1', '1', 'rename', '/x', 'gst', 'git status'), 'bad_value'],
     ['malformed handle', request('names', 'a1', '1', 'create', '/x', 'X', 'git status'), 'bad_value'],
     ['handle too short', request('names', 'a1', '1', 'create', '/x', 'gs', 'git status'), 'bad_value'],

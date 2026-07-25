@@ -8,6 +8,10 @@ import { dirname, join } from 'node:path';
  */
 export const MAX_SOCKET_PATH = 100;
 
+/** sun_path is measured in BYTES: a non-ASCII path can pass a character count
+ *  and still be truncated by the kernel at bind time. */
+export const socketPathLength = (path: string): number => Buffer.byteLength(path, 'utf8');
+
 export const SOCKET_NAME = 'daemon.sock';
 
 /**
@@ -26,7 +30,7 @@ export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env, uid: num
   const fallback = join(`/tmp/tabcat-${uid}`, SOCKET_NAME);
   if (runtimeDir === undefined || runtimeDir === '' || !isDirectory(runtimeDir)) return fallback;
   const preferred = join(runtimeDir, 'tabcat', SOCKET_NAME);
-  return preferred.length > MAX_SOCKET_PATH ? fallback : preferred;
+  return socketPathLength(preferred) > MAX_SOCKET_PATH ? fallback : preferred;
 }
 
 /**
@@ -46,8 +50,9 @@ export class SocketPathError extends Error {}
  * line typed in this shell would go to them.
  */
 export function ensureSocketDir(socketPath: string, uid: number = currentUid()): string {
-  if (socketPath.length > MAX_SOCKET_PATH) {
-    throw new SocketPathError(`socket path too long (${socketPath.length} > ${MAX_SOCKET_PATH}): ${socketPath}`);
+  const bytes = socketPathLength(socketPath);
+  if (bytes > MAX_SOCKET_PATH) {
+    throw new SocketPathError(`socket path too long (${bytes} bytes > ${MAX_SOCKET_PATH}): ${socketPath}`);
   }
   const dir = dirname(socketPath);
   mkdirSync(dir, { recursive: true, mode: 0o700 });

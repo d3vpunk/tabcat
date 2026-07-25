@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -290,6 +290,80 @@ describe('daemon: names', () => {
       'dep',
     ]);
     client.close();
+  });
+});
+
+describe('daemon: resilience', () => {
+  it('answers with an error instead of dying when a file cannot be read', async () => {
+    // handleLine runs inside a socket data callback: an uncaught throw there
+    // takes the daemon down and every other shell's connection with it.
+    const namesFile = join(dir, 'names.jsonl');
+    writeFileSync(namesFile, `${JSON.stringify({ name: 'dep', line: 'docker compose up -d', cwds: [], ts: 1 })}\n`);
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+    // Touch the mtime so the host reloads, then make the read fail.
+    writeFileSync(namesFile, `${JSON.stringify({ name: 'dep', line: 'docker compose up -d', cwds: [], ts: 2 })}\n`);
+    chmodSync(namesFile, 0o000);
+    try {
+      const rows = await withTimeout(client.request('names', 'list', CWD, '', ''), 2_000, 'daemon died');
+      expect(rows[0]?.[0]).toBeDefined();
+      // Still alive and serving afterwards.
+      expect((await client.request('ping'))[0]?.[0]).toBe('ok');
+    } finally {
+      chmodSync(namesFile, 0o600);
+      client.close();
+    }
+  });
+
+  it('reports a handle it could not persist instead of claiming success', async () => {
+    // appendName is best-effort; a handle only in memory would be invisible to
+    // every other shell and to the REPL.
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+    const lock = join(dir, 'names.jsonl.lock');
+    mkdirSync(lock, { recursive: true });
+    try {
+      const rows = await client.request('names', 'create', CWD, 'dep', 'docker compose up -d');
+      expect(rows[0]?.slice(0, 3)).toEqual(['err', 't1', 'bad_value']);
+      expect(rows[0]?.[3]).toBe('not-saved');
+    } finally {
+      rmSync(lock, { recursive: true, force: true });
+      client.close();
+    }
+  });
+
+  it('keeps writing history after a transient lock failure', async () => {
+    // The REPL, an import or a crashed process holds the lock for a moment —
+    // latching on that would silently drop the rest of the session.
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+    const lock = `${historyFile}.lock`;
+    mkdirSync(lock, { recursive: true });
+    const blocked = await client.request('learn', '0', '1700000000000', CWD, 'while-locked');
+    expect(blocked[0]?.[0]).toBe('err');
+    rmSync(lock, { recursive: true, force: true });
+
+    const after = await client.request('learn', '0', '1700000000001', CWD, 'after-unlock');
+    expect(after[0]?.[0]).toBe('ok');
+    expect(readFileSync(historyFile, 'utf8')).toContain('after-unlock');
+    client.close();
+  }, 30_000);
+
+  it('shuts down when its socket is no longer reachable', async () => {
+    // Something removed or replaced our socket file (a second daemon that
+    // believed we were dead, a tmp cleaner). Nothing can reach us any more, so
+    // squatting the model in memory until the idle timeout is pointless.
+    // The check shares the idle timer, which ticks at idleTimeout/4.
+    const handle = await daemon({ idleTimeoutMs: 8_000 });
+    rmSync(socketPath, { force: true });
+    await withTimeout(handle.closed, 6_000, 'daemon kept running with no reachable socket');
+  });
+
+  it('refuses to start a second daemon while the first is still warming', async () => {
+    // build() blocks the event loop, so a warming daemon cannot answer a probe.
+    // Declaring it dead would put two daemons on one history file.
+    await daemon({ build: 'manual' });
+    await expect(daemon({ build: 'manual' })).rejects.toBeInstanceOf(AlreadyRunningError);
   });
 });
 

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Server, Socket, createServer } from 'node:net';
 import { FsLike } from '../engine/fs-completer.js';
@@ -7,13 +7,15 @@ import { VERSION } from '../version.js';
 import { EngineHost } from './engine-host.js';
 import { pingDaemon } from './client.js';
 import { ensureSocketDir, pidfileFor } from './paths.js';
-import { DaemonRequest, PROTOCOL_VERSION, encodeMessage, err, ok, parseRequest } from './protocol.js';
+import { DaemonRequest, PROTOCOL_VERSION, codePointLength, encodeMessage, err, ok, parseRequest } from './protocol.js';
 
 /** Long enough to survive a lunch break, short enough not to squat on ~170 MB RSS forever. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 45 * 60_000;
 export const DEFAULT_COMPACT_INTERVAL_MS = 6 * 60 * 60_000;
 /** One fd per interactive shell; 32 is generous and bounds a fork-bomb of terminals. */
 export const DEFAULT_MAX_CONNECTIONS = 32;
+/** Must exceed the worst-case model build, or a warming daemon looks dead. */
+export const CLAIM_PROBE_TIMEOUT_MS = 5_000;
 /** A single request line above this means the client is broken or hostile. */
 export const DEFAULT_MAX_LINE_BYTES = 64 * 1024;
 
@@ -76,6 +78,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
 
   let lastActivity = Date.now();
   let closing = false;
+  let socketIno = -1;
   let idleTimer: NodeJS.Timeout | undefined;
   let compactTimer: NodeJS.Timeout | undefined;
   let resolveClosed: () => void = () => {};
@@ -91,9 +94,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     for (const socket of sockets) socket.destroy();
     sockets.clear();
     connections.clear();
+    // server.close() unlinks the bound path itself — there is no way to keep it
+    // from removing a socket another daemon may have put there meanwhile. What
+    // prevents that situation is the claim probe above plus the self-check
+    // below; this call only cleans up the normal case.
     await new Promise<void>((resolve) => server.close(() => resolve()));
     removeIfPresent(socketPath);
-    removeIfPresent(pidfile);
+    if (readPid(pidfile) === process.pid) removeIfPresent(pidfile);
     resolveClosed();
     return closed;
   };
@@ -108,7 +115,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     if (connections.size >= maxConnections) {
       // Answer before hanging up: a silent RST looks like a dead daemon and
       // would make the plugin spawn a second one.
-      socket.end(err('-', 'busy', `connection limit reached (${maxConnections})`));
+      // end() only half-closes: a client that never hangs up would keep the fd
+      // (and the entry in `sockets`) forever.
+      socket.end(err('-', 'busy', `connection limit reached (${maxConnections})`), () => socket.destroy());
       return;
     }
     connections.add(socket);
@@ -131,7 +140,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         // it so a client echoing frames back does not get errors.
         if (line !== '') {
           lastActivity = Date.now();
-          const result = handleLine(line, host, options);
+          // One bad file read must not take the daemon — and with it every
+          // other shell's connection — down. handleLine runs inside a socket
+          // 'data' callback, where a throw is an uncaught exception.
+          let result: LineResult;
+          try {
+            result = handleLine(line, host, options);
+          } catch (error) {
+            options.onWarn?.(`request failed: ${messageOf(error)}`);
+            result = { response: err(idOf(line), 'internal', messageOf(error)) };
+          }
           if (result.response !== null) socket.write(result.response);
           // Shut down only after the reply is queued — stop() destroys the
           // connection, so triggering it inline would swallow the `ok`.
@@ -143,22 +161,48 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   });
 
   await listenOn(server, socketPath);
-  // The socket inherits umask otherwise — 0600 is what keeps another user on
-  // the machine from talking to this daemon (and reading the command lines).
-  chmodSync(socketPath, 0o600);
-  writePidfile(pidfile);
+  try {
+    // The socket inherits umask otherwise — 0600 is what keeps another user on
+    // the machine from talking to this daemon (and reading the command lines).
+    chmodSync(socketPath, 0o600);
+    socketIno = inoOf(socketPath);
+    writePidfile(pidfile);
+  } catch (error) {
+    // Never leave a listening server behind on a half-finished start.
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    throw error;
+  }
+
+  // Accept errors (EMFILE and friends) arrive as 'error' on the server; without
+  // a listener Node turns them into an uncaught exception.
+  server.on('error', (error) => options.onWarn?.(`server error: ${messageOf(error)}`));
 
   // Both timers are unref'd: the listening server keeps the process alive, and
   // after close() nothing should linger and hold the event loop open.
   idleTimer = setInterval(
     () => {
+      // Our socket file is gone or belongs to someone else: nothing can reach us
+      // any more. Exiting frees the model's memory and lets the next shell start
+      // a daemon that is actually reachable, instead of squatting until the idle
+      // timeout.
+      if (socketIno !== -1 && inoOf(socketPath) !== socketIno) {
+        options.onWarn?.(`socket ${socketPath} is no longer ours — shutting down`);
+        void stop();
+        return;
+      }
       if (Date.now() - lastActivity >= idleTimeoutMs) void stop();
     },
     Math.max(1_000, Math.min(60_000, Math.floor(idleTimeoutMs / 4))),
   );
   idleTimer.unref();
 
-  compactTimer = setInterval(() => host.compact(), options.compactIntervalMs ?? DEFAULT_COMPACT_INTERVAL_MS);
+  compactTimer = setInterval(() => {
+    try {
+      host.compact();
+    } catch (error) {
+      options.onWarn?.(`compaction failed: ${messageOf(error)}`);
+    }
+  }, options.compactIntervalMs ?? DEFAULT_COMPACT_INTERVAL_MS);
   compactTimer.unref();
 
   let ready: Promise<void>;
@@ -168,7 +212,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   } else if (options.build === 'manual') {
     ready = Promise.resolve();
   } else {
-    ready = buildSoon(host);
+    ready = buildSoon(host, () => closing);
   }
 
   return { socketPath, host, ready, closed, close: stop };
@@ -181,7 +225,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
  */
 async function claimSocket(socketPath: string): Promise<void> {
   if (!existsSync(socketPath)) return;
-  const info = await pingDaemon(socketPath, 500);
+  // Generous on purpose: a daemon that is still building its model cannot
+  // answer (build() blocks the loop, and 20k entries take >500 ms). Declaring
+  // it dead would start a second daemon on the same history.
+  const info = await pingDaemon(socketPath, CLAIM_PROBE_TIMEOUT_MS);
   if (info !== null) {
     throw new AlreadyRunningError(`daemon already running on ${socketPath} (version ${info.version}, pid ${info.pid})`);
   }
@@ -218,7 +265,7 @@ function handleLine(line: string, host: EngineHost, options: DaemonOptions): Lin
           ['ok', request.id, prediction.prefix, host.handleHint(request.line, request.cwd, accepted)],
         ];
         for (const candidate of prediction.candidates.slice(0, limit)) {
-          rows.push(candidateRow(candidate, prediction.prefix));
+          rows.push(candidateRow(candidate, prediction.prefix, request.line, request.cursor));
         }
         return { response: encodeMessage(rows) };
       } catch (error) {
@@ -282,14 +329,20 @@ function acceptedLine(line: string, cursor: number, candidate: RankedCandidate, 
  * Wire shape of one candidate. `replacePrefixLength` is resolved here so the
  * shell never has to reason about defaults: accepting means replacing that many
  * characters left of the cursor with `display`. `insert` is what the ghost shows.
+ *
+ * The length goes out in CODE POINTS, not UTF-16 units — the shell cuts
+ * characters, so an emoji inside the replaced prefix would otherwise make it cut
+ * one too many.
  */
-function candidateRow(candidate: RankedCandidate, prefix: string): string[] {
+function candidateRow(candidate: RankedCandidate, prefix: string, line: string, cursor: number): string[] {
+  const replaceUtf16 = candidate.replacePrefixLength ?? prefix.length;
+  const replaced = line.slice(Math.max(0, cursor - replaceUtf16), cursor);
   return [
     candidate.insert,
     candidate.display,
     candidate.source,
     candidate.magicName ?? '',
-    String(candidate.replacePrefixLength ?? prefix.length),
+    String(codePointLength(replaced)),
   ];
 }
 
@@ -307,10 +360,12 @@ const listenOn = (server: Server, socketPath: string): Promise<void> =>
  * Tab gets a `warming` answer (and falls back to zsh completion) instead of a
  * connection refusal that would look like a crashed daemon.
  */
-const buildSoon = (host: EngineHost): Promise<void> =>
+const buildSoon = (host: EngineHost, isClosing: () => boolean): Promise<void> =>
   new Promise((resolve) => {
     setImmediate(() => {
-      host.build();
+      // A close() between listen and this tick means nobody is waiting for the
+      // model — and build() would compact the history of a daemon that is gone.
+      if (!isClosing()) host.build();
       resolve();
     });
   });
@@ -323,6 +378,27 @@ function writePidfile(pidfile: string): void {
     // Informational only — the socket, not the pidfile, is the source of truth.
   }
 }
+
+const idOf = (line: string): string => {
+  const id = line.split('\t')[1] ?? '-';
+  return /^[A-Za-z0-9_-]{1,32}$/.test(id) ? id : '-';
+};
+
+const inoOf = (path: string): number => {
+  try {
+    return statSync(path).ino;
+  } catch {
+    return -1;
+  }
+};
+
+const readPid = (pidfile: string): number => {
+  try {
+    return Number(readFileSync(pidfile, 'utf8').trim());
+  } catch {
+    return -1;
+  }
+};
 
 const removeIfPresent = (path: string): void => {
   try {

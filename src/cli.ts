@@ -9,12 +9,15 @@ import { namesFileFor, readNames } from './engine/names-store.js';
 import { MAX_HISTORY_ENTRIES, appendHistory, dedupeImportEntries, defaultHistoryFile, readHistory } from './engine/store.js';
 import { AlreadyRunningError, startDaemon } from './daemon/server.js';
 import { pingDaemon, shutdownDaemon } from './daemon/client.js';
-import { defaultSocketPath } from './daemon/paths.js';
+import { SocketPathError, defaultSocketPath } from './daemon/paths.js';
 import { PROTOCOL_VERSION } from './daemon/protocol.js';
 import { checkEnvironment, defaultCheckDeps, formatCheck, initSnippet, pluginFilePath } from './plugin/init.js';
 import { realFs } from './repl/real-fs.js';
 import { VERSION } from './version.js';
 
+
+const isAddressInUse = (error: unknown): boolean =>
+  error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'EADDRINUSE';
 
 const readHistoryWithWarning = (file: string): HistoryEntry[] =>
   readHistory(file, (count) => console.error(`tabcat: skipped ${count} invalid history line(s) (${file}).`));
@@ -196,10 +199,17 @@ switch (args.command) {
         onWarn: (message) => console.error(`tabcat: ${message}`),
       });
     } catch (error) {
-      if (error instanceof AlreadyRunningError) {
+      if (error instanceof AlreadyRunningError || isAddressInUse(error)) {
         // The desired end state (a daemon is listening) already holds — the
-        // plugin races several shells into this on purpose.
+        // plugin races several shells into this on purpose, and two of them can
+        // pass the stale-socket probe before either has bound.
+        console.error(`tabcat: ${error instanceof Error ? error.message : String(error)}`);
+        break;
+      }
+      if (error instanceof SocketPathError) {
+        // A Node stack trace during shell startup reads like a crash.
         console.error(`tabcat: ${error.message}`);
+        process.exitCode = 1;
         break;
       }
       throw error;

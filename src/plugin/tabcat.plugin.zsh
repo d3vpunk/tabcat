@@ -64,6 +64,10 @@ fi
 # daemon needs ~0.3-0.6 s until it listens, and blocking a keystroke for that
 # long is worse than missing one suggestion. The daemon is normally started at
 # plugin load (see _tabcat_warm_daemon), so this path is the exception.
+# Longest line still worth a prediction. A pasted blob would otherwise be sent
+# on every keystroke and can exceed the daemon's request limit, which costs the
+# connection for nothing.
+: ${TABCAT_MAX_LINE:=4096}
 : ${TABCAT_CONNECT_TRIES:=3}
 # Start the daemon when the shell starts instead of on the first keystroke.
 : ${TABCAT_WARM_ON_LOAD:=1}
@@ -407,6 +411,7 @@ _tabcat_ghost() {
   (( TABCAT_GHOST )) || return 0
   (( _TABCAT_OFF )) && return 0
   [[ -z $BUFFER ]] && return 0
+  (( ${#BUFFER} > TABCAT_MAX_LINE )) && return 0
   # Only at the end of the line: a ghost behind a mid-line cursor is noise.
   (( CURSOR == ${#BUFFER} )) || return 0
 
@@ -462,6 +467,15 @@ _tabcat_lone_word() {
   return 0
 }
 
+# Fresh prompt: the accept-undo stack belongs to one line. Without this,
+# Shift+Tab on an empty prompt would restore the previous command's buffer.
+_tabcat_reset_line() {
+  _TABCAT_UNDO_BUFFERS=()
+  _TABCAT_UNDO_CURSORS=()
+  _tabcat_clear_ghost
+  return 0
+}
+
 # Replaces `replace` characters left of the cursor with `text`.
 _tabcat_apply() {
   local text=$1 replace=$2
@@ -474,6 +488,10 @@ _tabcat_apply() {
 }
 
 tabcat-tab() {
+  if (( ${#BUFFER} > TABCAT_MAX_LINE )); then
+    _tabcat_fallback_tab
+    return
+  fi
   if ! _tabcat_predict $TABCAT_MENU_LIMIT || (( ${#_TABCAT_ROWS} < 2 )); then
     _tabcat_fallback_tab
     return
@@ -537,7 +555,7 @@ tabcat-undo-accept() {
 # Enter: expand an exact magic-name handle before running it. This has to be a
 # widget — preexec runs after the command line is fixed and cannot rewrite it.
 tabcat-accept-line() {
-  _tabcat_clear_ghost
+  _tabcat_reset_line
   local REPLY
   _tabcat_lone_word
   local candidate=$REPLY
@@ -739,16 +757,18 @@ _tabcat_precmd() {
 # ---------------------------------------------------------------------------
 
 _tabcat_after_widget() {
-  local original=$1
-  shift
+  local original=$1 post=$2
+  shift 2
   local outcome=0
   zle $original -- "$@" || outcome=$?
-  _tabcat_ghost
+  $post
   return $outcome
 }
 
+# `post` runs after the original widget — the ghost refresh for editing widgets,
+# the per-line reset for zle-line-init.
 _tabcat_wrap_widget() {
-  local widget=$1
+  local widget=$1 post=${2:-_tabcat_ghost}
   local original="tabcat-orig-${widget}"
   [[ -n ${widgets[$widget]:-} ]] || return 0
   [[ ${widgets[$widget]} == user:_tabcat_wrapped_* ]] && return 0
@@ -768,7 +788,7 @@ _tabcat_wrap_widget() {
       ;;
   esac
 
-  functions[_tabcat_wrapped_${widget}]="_tabcat_after_widget ${original} \"\$@\""
+  functions[_tabcat_wrapped_${widget}]="_tabcat_after_widget ${original} ${post} \"\$@\""
   zle -N $widget _tabcat_wrapped_${widget}
 }
 
@@ -779,9 +799,21 @@ _tabcat_wrap_widget() {
 # Free, or already ours: re-sourcing .zshrc must not warn about bindings this
 # plugin installed itself.
 _tabcat_key_available() {
-  local key=$1
-  local -a binding=(${(z)"$(bindkey $key)"})
+  local keymap=$1 key=$2
+  local -a binding=(${(z)"$(bindkey -M $keymap $key)"})
   [[ ${#binding} -lt 2 || ${binding[2]} == undefined-key || ${binding[2]} == tabcat-* ]]
+}
+
+# Binds into named keymaps instead of whichever one happens to be current.
+# `bindkey -v` REPLACES main with viins: a plugin that bound into main before
+# that would lose every binding, leaving ghost text but a dead Tab and Enter.
+_tabcat_bind() {
+  local widget=$1 key=$2
+  shift 2
+  local keymap
+  for keymap in "$@"; do
+    bindkey -M $keymap "$key" $widget 2>/dev/null
+  done
 }
 
 _tabcat_report_conflicts() {
@@ -845,14 +877,17 @@ _tabcat_setup() {
     zle -C tabcat-menu menu-select _tabcat_menu_completer 2>/dev/null
   fi
 
-  bindkey '^I' tabcat-tab
-  bindkey '^M' tabcat-accept-line
-  bindkey '^J' tabcat-accept-line
+  # Insert-mode keymaps get everything; vicmd only Enter, so that Escape
+  # followed by Enter still expands a magic name.
+  local -a insert_maps=(emacs viins)
+  _tabcat_bind tabcat-tab '^I' $insert_maps
+  _tabcat_bind tabcat-accept-line '^M' $insert_maps vicmd
+  _tabcat_bind tabcat-accept-line '^J' $insert_maps vicmd
   # Both sequences: not every terminal sends the terminfo one.
-  bindkey '^[[Z' tabcat-undo-accept
-  [[ -n ${terminfo[kcbt]:-} ]] && bindkey "${terminfo[kcbt]}" tabcat-undo-accept
-  bindkey "${terminfo[kcuf1]:-^[[C}" tabcat-forward-chunk
-  bindkey '^[[C' tabcat-forward-chunk
+  _tabcat_bind tabcat-undo-accept '^[[Z' $insert_maps
+  [[ -n ${terminfo[kcbt]:-} ]] && _tabcat_bind tabcat-undo-accept "${terminfo[kcbt]}" $insert_maps
+  _tabcat_bind tabcat-forward-chunk "${terminfo[kcuf1]:-^[[C}" $insert_maps
+  _tabcat_bind tabcat-forward-chunk '^[[C' $insert_maps
 
   local -A chords=(
     [$TABCAT_KEY_LABEL]=tabcat-label
@@ -860,16 +895,27 @@ _tabcat_setup() {
     [$TABCAT_KEY_QUERY]=tabcat-query
     [$TABCAT_KEY_MENU]=tabcat-menu
   )
-  local chord
+  local chord keymap
   for chord in ${(k)chords}; do
     [[ -z $chord ]] && continue
     zle -l ${chords[$chord]} 2>/dev/null || continue
-    if _tabcat_key_available $chord || [[ -n ${TABCAT_FORCE:-} ]]; then
-      bindkey $chord ${chords[$chord]}
-    else
-      print -u2 "tabcat: $chord is already bound — skipped (rebind via TABCAT_KEY_*)"
-    fi
+    for keymap in $insert_maps; do
+      if _tabcat_key_available $keymap $chord || [[ -n ${TABCAT_FORCE:-} ]]; then
+        bindkey -M $keymap $chord ${chords[$chord]}
+      elif [[ $keymap == emacs ]]; then
+        # Reported once, for the keymap the user is most likely in.
+        print -u2 "tabcat: $chord is already bound — skipped (rebind via TABCAT_KEY_*)"
+      fi
+    done
   done
+
+  # A fresh prompt must not inherit the previous line's undo stack or ghost.
+  # Wrapped, not overwritten: users and prompt frameworks define this widget.
+  if [[ -n ${widgets[zle-line-init]:-} ]]; then
+    _tabcat_wrap_widget zle-line-init _tabcat_reset_line
+  else
+    zle -N zle-line-init _tabcat_reset_line
+  fi
 
   _tabcat_warm_daemon
 

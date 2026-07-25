@@ -85,9 +85,15 @@ export function unescapeField(value: string): string {
   return out;
 }
 
-/** Rows -> wire block: every field escaped, tab-joined, empty line terminates. */
+/**
+ * Rows -> wire block: every field escaped, tab-joined, empty line terminates.
+ * A row whose fields are all empty is dropped: it would serialise to an empty
+ * line, i.e. a second block terminator, and every following response on that
+ * connection would be attributed to the wrong request.
+ */
 export function encodeMessage(rows: readonly (readonly string[])[]): string {
-  return `${rows.map((row) => row.map(escapeField).join('\t')).join('\n')}\n\n`;
+  const usable = rows.filter((row) => row.some((field) => field !== ''));
+  return `${usable.map((row) => row.map(escapeField).join('\t')).join('\n')}\n\n`;
 }
 
 /** Wire block -> rows. The terminating empty line is not a row. */
@@ -112,6 +118,9 @@ const FIELD_COUNT: Record<DaemonRequest['op'], number> = {
   names: 7,
   search: 6,
 };
+
+/** Clock skew a `learn` timestamp may have; beyond that it is a client bug. */
+export const MAX_TS_SKEW_MS = 24 * 60 * 60_000;
 
 /** Upper bound for `predict.limit` — the ghost asks for 1, the dropdown for ~10. */
 export const MAX_PREDICT_LIMIT = 200;
@@ -152,9 +161,16 @@ export function parseRequest(rawLine: string): ParseResult {
       const cwd = value(5);
       if (cwd === '') return fail(rawId, 'bad_value', 'cwd must not be empty');
       const line = value(6);
+      // zsh counts the cursor in CHARACTERS (code points), JavaScript indexes
+      // UTF-16 units: for `a😀b` the shell says 3 where the string is 4 long.
+      // Without this conversion an emoji in the line shifts every offset and
+      // Tab would splice the buffer at the wrong place.
       // A cursor past the line is a client bug (out-of-sync BUFFER); clamping
       // beats erroring — the shell would lose its completion for that keystroke.
-      return { ok: true, request: { op: 'predict', id: rawId, limit, cursor: Math.min(cursor, line.length), cwd, line } };
+      return {
+        ok: true,
+        request: { op: 'predict', id: rawId, limit, cursor: utf16IndexOf(line, cursor), cwd, line },
+      };
     }
     case 'learn': {
       const exitCode = Number(fields[3]);
@@ -162,7 +178,11 @@ export function parseRequest(rawLine: string): ParseResult {
         return fail(rawId, 'bad_value', `invalid exitCode: ${truncate(fields[3] ?? '')}`);
       }
       const ts = Number(fields[4]);
-      if (!Number.isInteger(ts) || ts <= 0) return fail(rawId, 'bad_value', `invalid ts: ${truncate(fields[4] ?? '')}`);
+      // Upper bound too: a client sending microseconds would store entries far
+      // in the future, which score as zero — learning would silently do nothing.
+      if (!Number.isInteger(ts) || ts <= 0 || ts > Date.now() + MAX_TS_SKEW_MS) {
+        return fail(rawId, 'bad_value', `invalid ts: ${truncate(fields[4] ?? '')}`);
+      }
       const cwd = value(5);
       if (cwd === '') return fail(rawId, 'bad_value', 'cwd must not be empty');
       const line = value(6);
@@ -197,6 +217,22 @@ export function parseRequest(rawLine: string): ParseResult {
     }
   }
 }
+
+/** Code-point index (what zsh reports) -> UTF-16 index (what JS strings use). */
+export function utf16IndexOf(text: string, codePointIndex: number): number {
+  if (codePointIndex <= 0) return 0;
+  let index = 0;
+  let seen = 0;
+  for (const char of text) {
+    if (seen >= codePointIndex) break;
+    index += char.length;
+    seen++;
+  }
+  return index;
+}
+
+/** UTF-16 length -> code points, so the shell can cut the right number of characters. */
+export const codePointLength = (text: string): number => [...text].length;
 
 const fail = (id: string, code: ErrorCode, message: string): ParseFailure => ({ ok: false, id, code, message });
 

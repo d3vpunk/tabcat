@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { MAX_SOCKET_PATH, defaultSocketPath } from '../daemon/paths.js';
+import { MAX_SOCKET_PATH, defaultSocketPath, socketPathLength } from '../daemon/paths.js';
 import { VERSION } from '../version.js';
 
 export const MIN_NODE_MAJOR = 20;
@@ -114,11 +114,12 @@ export function checkEnvironment(deps: CheckDeps): CheckResult {
   }
 
   const socketPath = defaultSocketPath(deps.env);
+  const socketBytes = socketPathLength(socketPath);
   lines.push(
     check(
-      socketPath.length <= MAX_SOCKET_PATH,
+      socketBytes <= MAX_SOCKET_PATH,
       true,
-      `socket path ${socketPath} (${socketPath.length}/${MAX_SOCKET_PATH} characters)`,
+      `socket path ${socketPath} (${socketBytes}/${MAX_SOCKET_PATH} bytes)`,
     ),
   );
 

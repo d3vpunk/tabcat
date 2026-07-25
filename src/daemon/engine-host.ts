@@ -1,4 +1,4 @@
-import { closeSync, openSync, readSync, statSync, type Stats } from 'node:fs';
+import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { HistoryEntry } from '../engine/model.js';
 import { MagicName, NameIndex, handleIssue, validateHandle } from '../engine/names.js';
@@ -161,8 +161,10 @@ export class EngineHost {
     try {
       appendHistory(this.options.historyFile, entry);
     } catch (error) {
-      this.historyWritable = false;
       const message = messageOf(error);
+      // A busy lock is transient: the REPL, an import or another daemon holds it
+      // for a moment. Latching on that would silently drop a whole session.
+      if (isPermanentWriteError(error)) this.historyWritable = false;
       this.options.onWarn?.(`history could not be saved (${this.options.historyFile}): ${message}`);
       return { learned: false, error: message };
     }
@@ -188,9 +190,15 @@ export class EngineHost {
       return { created: false, reason: handleIssue(name.toLowerCase(), line, handles) ?? 'malformed' };
     }
     const magicName: MagicName = { name: accepted, line, cwds: [cwd], ts: this.now() };
+    if (!appendName(this.namesFile, magicName)) {
+      // Nothing on disk means no other shell and not the REPL would ever see
+      // this handle — do not pretend it exists.
+      return { created: false, reason: 'not-saved' };
+    }
     this.nameIndex.add(magicName);
-    appendName(this.namesFile, magicName);
-    this.snapshotNames();
+    // Forget the signature instead of adopting it: a foreign name appended
+    // between our write and a stat would otherwise be skipped.
+    this.namesSignature = '';
     return { created: true };
   }
 
@@ -198,9 +206,9 @@ export class EngineHost {
   namesDelete(line: string): boolean {
     this.refreshNames();
     if (!this.nameIndex.has(line)) return false;
+    if (!appendName(this.namesFile, { name: '', line, cwds: [], ts: this.now() })) return false;
     this.nameIndex.remove(line);
-    appendName(this.namesFile, { name: '', line, cwds: [], ts: this.now() });
-    this.snapshotNames();
+    this.namesSignature = '';
     return true;
   }
 
@@ -245,11 +253,26 @@ export class EngineHost {
 
     const entries: HistoryEntry[] = [];
     if (stats !== null && stats.size > 0) {
-      this.readRange(0, stats.size, (line) => {
-        const entry = parseHistoryLine(line);
-        if (entry !== null) entries.push(entry);
-      });
-      this.offset = stats.size;
+      let fd: number | null = null;
+      try {
+        fd = openSync(this.options.historyFile, 'r');
+        const opened = fstatSync(fd);
+        this.ino = opened.ino;
+        if (this.readRange(fd, 0, opened.size, (line) => {
+          const entry = parseHistoryLine(line);
+          if (entry !== null) entries.push(entry);
+        })) {
+          this.offset = opened.size;
+        } else {
+          // Unreadable: stay at offset 0 with an unknown inode so the next
+          // request tries again instead of skipping the file forever.
+          this.ino = -1;
+        }
+      } catch {
+        this.ino = -1;
+      } finally {
+        if (fd !== null) closeSync(fd);
+      }
     }
     this.entryCount = entries.length;
     // Oldest first: rememberRecent unshifts, so the newest ends up in front.
@@ -263,22 +286,51 @@ export class EngineHost {
   }
 
   private refreshHistory(): void {
-    const stats = statOrNull(this.options.historyFile);
-    if (stats === null) return; // File vanished: keep serving what we learned.
-    if (stats.ino !== this.ino || stats.size < this.offset) {
-      // Someone compacted (rewrite via rename) or truncated the file.
-      this.loadAll();
-      return;
+    let fd: number;
+    try {
+      fd = openSync(this.options.historyFile, 'r');
+    } catch {
+      return; // Gone or unreadable: keep serving what we learned.
     }
-    if (stats.size === this.offset) return;
-    this.readRange(this.offset, stats.size, (line) => {
-      const entry = parseHistoryLine(line);
-      if (entry === null) return;
-      this.entryCount++;
-      this.rememberRecent(entry.line);
-      if (isSingleLine(entry)) this.predictor?.learn(entry);
-    });
-    this.offset = stats.size;
+    try {
+      // fstat on the open fd, not stat on the path: a compaction landing between
+      // a path stat and the open would have us read the NEW file from an offset
+      // that belonged to the old one.
+      const stats = fstatSync(fd);
+      if (stats.ino !== this.ino || stats.size < this.offset || !this.offsetLooksSane(fd)) {
+        this.loadAll();
+        return;
+      }
+      if (stats.size === this.offset) return;
+      const read = this.readRange(fd, this.offset, stats.size, (line) => {
+        const entry = parseHistoryLine(line);
+        if (entry === null) return;
+        this.entryCount++;
+        this.rememberRecent(entry.line);
+        if (isSingleLine(entry)) this.predictor?.learn(entry);
+      });
+      // A partial read must not advance past what was actually consumed.
+      if (read) this.offset = stats.size;
+      else this.ino = -1; // force a rebuild on the next request
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /**
+   * Our offset must sit right behind a newline. An in-place rewrite that keeps
+   * the inode and grows the file (restoring a backup with `cat`) would otherwise
+   * be parsed from a byte offset that means nothing in the new content.
+   */
+  private offsetLooksSane(fd: number): boolean {
+    if (this.offset === 0) return true;
+    try {
+      const byte = Buffer.allocUnsafe(1);
+      const read = readSync(fd, byte, 0, 1, this.offset - 1);
+      return read === 1 && byte[0] === 0x0a;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -286,31 +338,27 @@ export class EngineHost {
    * writer mid-append) stays buffered in `partial`; multi-byte characters
    * split across a chunk boundary are held by the StringDecoder.
    */
-  private readRange(from: number, to: number, onLine: (line: string) => void): void {
-    let fd: number;
-    try {
-      fd = openSync(this.options.historyFile, 'r');
-    } catch {
-      return;
-    }
-    try {
-      const buffer = Buffer.allocUnsafe(READ_CHUNK);
-      let position = from;
-      while (position < to) {
-        const bytes = readSync(fd, buffer, 0, Math.min(buffer.length, to - position), position);
-        if (bytes <= 0) break;
-        position += bytes;
-        this.partial += this.decoder.write(buffer.subarray(0, bytes));
-        let newline = this.partial.indexOf('\n');
-        while (newline >= 0) {
-          onLine(this.partial.slice(0, newline));
-          this.partial = this.partial.slice(newline + 1);
-          newline = this.partial.indexOf('\n');
-        }
+  private readRange(fd: number, from: number, to: number, onLine: (line: string) => void): boolean {
+    const buffer = Buffer.allocUnsafe(READ_CHUNK);
+    let position = from;
+    while (position < to) {
+      let bytes: number;
+      try {
+        bytes = readSync(fd, buffer, 0, Math.min(buffer.length, to - position), position);
+      } catch {
+        return false;
       }
-    } finally {
-      closeSync(fd);
+      if (bytes <= 0) return false;
+      position += bytes;
+      this.partial += this.decoder.write(buffer.subarray(0, bytes));
+      let newline = this.partial.indexOf('\n');
+      while (newline >= 0) {
+        onLine(this.partial.slice(0, newline));
+        this.partial = this.partial.slice(newline + 1);
+        newline = this.partial.indexOf('\n');
+      }
     }
+    return true;
   }
 
   private refreshNames(): void {
@@ -318,15 +366,24 @@ export class EngineHost {
     const stats = statOrNull(this.namesFile);
     const signature = stats === null ? '' : `${stats.ino}:${stats.size}:${stats.mtimeMs}`;
     if (signature === this.namesSignature) return;
-    // Read after the stat: a write landing in between only costs one extra
-    // reload next time — reset() is idempotent.
-    this.nameIndex.reset(readNames(this.namesFile));
+    try {
+      // Read after the stat: a write landing in between only costs one extra
+      // reload next time — reset() is idempotent.
+      this.nameIndex.reset(readNames(this.namesFile));
+    } catch (error) {
+      // An unreadable names.jsonl must not kill the daemon for every shell.
+      this.options.onWarn?.(`names could not be read (${this.namesFile}): ${messageOf(error)}`);
+      return;
+    }
     this.namesSignature = signature;
   }
 
   /** Newest-first, one entry per distinct line: a repeated command moves up
    *  instead of appearing twice. */
   private rememberRecent(line: string): void {
+    // An empty command would serialise to an all-empty response row, and an
+    // empty line is the wire's block terminator.
+    if (line === '') return;
     if (this.recentSeen.has(line)) {
       const index = this.recent.indexOf(line);
       if (index >= 0) this.recent.splice(index, 1);
@@ -359,3 +416,13 @@ const statOrNull = (file: string): Stats | null => {
 };
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/**
+ * Permanent = no point retrying this session. A busy lock, a timeout or a
+ * transient I/O hiccup is not permanent; a read-only filesystem is.
+ */
+function isPermanentWriteError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = 'code' in error ? String((error as { code?: unknown }).code) : '';
+  return ['EACCES', 'EPERM', 'EROFS', 'ENOSPC', 'EISDIR'].includes(code);
+}
