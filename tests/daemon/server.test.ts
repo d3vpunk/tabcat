@@ -220,6 +220,53 @@ describe('daemon: learn', () => {
   });
 });
 
+describe('daemon: cwds', () => {
+  it('answers with ranked directories over the wire', async () => {
+    writeHistory(
+      entry('a', { cwd: '/work/old', ts: 1_600_000_000_000 }),
+      entry('b', { cwd: '/work/new', ts: Date.now() }),
+    );
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+    const rows = await client.request('cwds', '10');
+    expect(rows[0]?.[0]).toBe('ok');
+    const listed = rows.slice(1);
+    expect(listed.map((row) => row[0])).toEqual(['/work/new', '/work/old']);
+    // path, score, lastUsed — score fixed-point so no client sees 1e-7.
+    expect(listed[0]).toHaveLength(3);
+    expect(listed[0]?.[1]).toMatch(/^\d+\.\d{4}$/);
+    expect(Number(listed[0]?.[2])).toBeGreaterThan(Number(listed[1]?.[2]));
+    client.close();
+  });
+
+  it('returns only the header when nothing was learned with a directory', async () => {
+    writeHistory(entry('a', { cwd: null }));
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+    expect(await client.request('cwds', '10')).toEqual([['ok', 't1']]);
+    client.close();
+  });
+
+  it('reports warming while the model is still building', async () => {
+    writeHistory(entry('a'));
+    await daemon({ build: 'manual' });
+    const client = await TestClient.connect(socketPath);
+    const rows = await client.request('cwds', '10');
+    expect(rows[0]?.[0]).toBe('err');
+    expect(rows[0]?.[2]).toBe('warming');
+    client.close();
+  });
+
+  it('learns a directory it was told about in the same session', async () => {
+    writeHistory(entry('a', { cwd: '/work' }));
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+    await client.request('learn', '0', String(Date.now()), '/fresh', 'npm test');
+    expect((await client.request('cwds', '10')).slice(1).map((row) => row[0])).toContain('/fresh');
+    client.close();
+  });
+});
+
 describe('daemon: names', () => {
   it('creates, lists and deletes a handle', async () => {
     await daemon();

@@ -36,7 +36,10 @@ export type DaemonRequest =
   | { op: 'predict'; id: string; limit: number; cursor: number; cwd: string; line: string }
   | { op: 'learn'; id: string; exitCode: number; ts: number; cwd: string; line: string }
   | { op: 'names'; id: string; sub: 'list' | 'create' | 'delete' | 'resolve'; cwd: string; name: string; line: string }
-  | { op: 'search'; id: string; limit: number; cwd: string; query: string };
+  | { op: 'search'; id: string; limit: number; cwd: string; query: string }
+  // No cwd field, unlike every other op: this is what a client asks BECAUSE it
+  // has no working directory to send.
+  | { op: 'cwds'; id: string; limit: number };
 
 export interface ParseFailure {
   ok: false;
@@ -117,6 +120,7 @@ const FIELD_COUNT: Record<DaemonRequest['op'], number> = {
   learn: 7,
   names: 7,
   search: 6,
+  cwds: 4,
 };
 
 /** Clock skew a `learn` timestamp may have; beyond that it is a client bug. */
@@ -197,6 +201,13 @@ export function parseRequest(rawLine: string): ParseResult {
       const cwd = value(4);
       if (cwd === '') return fail(rawId, 'bad_value', 'cwd must not be empty');
       return { ok: true, request: { op: 'search', id: rawId, limit, cwd, query: value(5) } };
+    }
+    case 'cwds': {
+      const limit = Number(fields[3]);
+      if (!Number.isInteger(limit) || limit < 0 || limit > MAX_PREDICT_LIMIT) {
+        return fail(rawId, 'bad_value', `invalid limit: ${truncate(fields[3] ?? '')}`);
+      }
+      return { ok: true, request: { op: 'cwds', id: rawId, limit } };
     }
     case 'names': {
       const sub = fields[3] ?? '';

@@ -207,6 +207,13 @@ or a GUI in another language — does not have to reimplement the `sun_path` rul
 third time. It prints one line and touches nothing: `--socket` wins, then
 `$TABCAT_SOCKET`, then the computed default.
 
+The daemon also answers `cwds`, which ranks the directories you actually work in
+by the same frecency curve prediction uses. A shell never needs it — it has a
+working directory. A front end that floats above the desktop does not, and has to
+ask before it can predict anything. Directories only enter that ranking through
+commands tabcat saw itself: imported shell history carries no directory, so the
+answer for a fresh install is empty rather than guessed.
+
 Measured on macOS/zsh 5.9: **0.027 ms** per request over the persistent fd,
 versus ~6 ms for a `nc -U` fork per keystroke and ~110 ms for a Node cold start
 — which is why it is a daemon and why the shell holds the fd open. A cold daemon

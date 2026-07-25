@@ -302,6 +302,21 @@ function handleLine(line: string, host: EngineHost, options: DaemonOptions): Lin
       return { response: encodeMessage(rows) };
     }
 
+    case 'cwds': {
+      if (host.state === 'warming') return { response: err(request.id, 'warming', 'predictor is still building') };
+      const limit = request.limit === 0 ? 10 : request.limit;
+      const rows: string[][] = [['ok', request.id]];
+      for (const entry of host.cwds(limit)) {
+        // toFixed, not String(): a tiny score would serialise as 1e-7, which a
+        // client parsing floats by hand reads as 1.
+        rows.push([entry.path, entry.score.toFixed(4), String(entry.lastUsed)]);
+      }
+      // An empty result is the honest answer for a fresh install — every imported
+      // entry has cwd null. The client falls back to its own seed instead of the
+      // daemon inventing directories.
+      return { response: encodeMessage(rows) };
+    }
+
     case 'names': {
       if (request.sub === 'list') {
         const rows: string[][] = [['ok', request.id]];

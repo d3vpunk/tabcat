@@ -282,6 +282,86 @@ describe('EngineHost: magic names', () => {
   });
 });
 
+describe('EngineHost: cwds', () => {
+  const paths = (engine: EngineHost, limit = 10): string[] => engine.cwds(limit).map((c) => c.path);
+
+  it('ranks directories by frecency, not by raw count', () => {
+    // /old has three times the commands but they are two weeks stale; the short
+    // term dominates, so one fresh command in /new outranks them.
+    const twoWeeks = 1_700_000_100_000 - 14 * 86_400_000;
+    write([
+      entry('a', { cwd: '/old', ts: twoWeeks }),
+      entry('b', { cwd: '/old', ts: twoWeeks + 1 }),
+      entry('c', { cwd: '/old', ts: twoWeeks + 2 }),
+      entry('d', { cwd: '/new', ts: 1_700_000_099_000 }),
+    ]);
+    expect(paths(host())).toEqual(['/new', '/old']);
+  });
+
+  it('honours the limit', () => {
+    write([entry('a', { cwd: '/one' }), entry('b', { cwd: '/two' }), entry('c', { cwd: '/three' })]);
+    expect(host().cwds(2)).toHaveLength(2);
+  });
+
+  it('skips imported entries, which carry no directory', () => {
+    write([entry('a', { cwd: null }), entry('b', { cwd: '/work' })]);
+    expect(paths(host())).toEqual(['/work']);
+  });
+
+  it('is empty for a history that only came from an import', () => {
+    // A fresh install: the GUI needs to see this and fall back to its own seed.
+    write([entry('a', { cwd: null }), entry('b', { cwd: null })]);
+    expect(host().cwds(10)).toEqual([]);
+  });
+
+  it('treats a trailing slash as the same directory', () => {
+    write([entry('a', { cwd: '/work' }), entry('b', { cwd: '/work/' })]);
+    expect(paths(host())).toEqual(['/work']);
+  });
+
+  it('keeps the sample list bounded and still reports the newest use', () => {
+    const first = 1_700_000_000_000;
+    write(Array.from({ length: 200 }, (_, i) => entry(`cmd-${i}`, { cwd: '/work', ts: first + i })));
+    const [only] = host({ maxEntries: 500 }).cwds(10);
+    expect(only?.path).toBe('/work');
+    expect(only?.lastUsed).toBe(first + 199);
+    expect(Number.isFinite(only?.score)).toBe(true);
+  });
+
+  it('reports the newest timestamp even when the file is out of order', () => {
+    // A clock that jumped backwards appends an older entry after a newer one.
+    write([
+      entry('a', { cwd: '/work', ts: 1_700_000_050_000 }),
+      entry('b', { cwd: '/work', ts: 1_700_000_040_000 }),
+    ]);
+    expect(host().cwds(10)[0]?.lastUsed).toBe(1_700_000_050_000);
+  });
+
+  it('sees a directory another process appended', () => {
+    // The REPL and `import` write history.jsonl directly. Those entries reach
+    // the index only through the tail follow, never through learn().
+    write([entry('a', { cwd: '/work' })]);
+    const engine = host();
+    expect(paths(engine)).toEqual(['/work']);
+    append(entry('b', { cwd: '/elsewhere', ts: 1_700_000_099_999 }));
+    expect(paths(engine)).toEqual(['/elsewhere', '/work']);
+  });
+
+  it('does not double count after a compaction rebuild', () => {
+    write([entry('a', { cwd: '/work' })]);
+    const engine = host({ maxEntries: 2 });
+    engine.learn(entry('b', { cwd: '/work' }));
+    engine.learn(entry('c', { cwd: '/work' }));
+    const before = engine.cwds(10)[0];
+    engine.compact();
+    const after = engine.cwds(10)[0];
+    // Compaction keeps 2 of 3 entries, so the score may drop — but a missing
+    // reset in loadAll() would make it grow instead.
+    expect(after?.score).toBeLessThanOrEqual(before?.score ?? 0);
+    expect(engine.stats().entries).toBe(2);
+  });
+});
+
 describe('EngineHost: compaction', () => {
   it('caps the file and keeps the newest entries', () => {
     write(Array.from({ length: 20 }, (_, i) => entry(`cmd-${i}`, { ts: 1_700_000_000_000 + i })));

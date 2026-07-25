@@ -1,6 +1,6 @@
 import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
-import { HistoryEntry } from '../engine/model.js';
+import { DEFAULT_SCORING, HistoryEntry, frecency } from '../engine/model.js';
 import { MagicName, NameIndex, handleIssue, validateHandle } from '../engine/names.js';
 import { appendName, namesFileFor, readNames } from '../engine/names-store.js';
 import { FsLike } from '../engine/fs-completer.js';
@@ -33,6 +33,13 @@ export interface NamesCreateResult {
   reason?: string;
 }
 
+export interface CwdEntry {
+  path: string;
+  score: number;
+  /** Epoch millis of the most recent command seen in this directory. */
+  lastUsed: number;
+}
+
 export interface HostStats {
   state: HostState;
   entries: number;
@@ -45,6 +52,20 @@ export interface HostStats {
 }
 
 const READ_CHUNK = 64 * 1024;
+
+/**
+ * Timestamps kept per directory. Bounded for the same reason as
+ * `maxOccurrencesPerEdge`: the youngest samples decide the ranking, and memory
+ * must not scale with MAX_HISTORY_ENTRIES.
+ */
+const MAX_CWD_SAMPLES = 64;
+
+/**
+ * Only the trailing slash — a pure string rule. Resolving symlinks would mean
+ * filesystem calls on the load path, so `/x/y` and a symlinked alias of it stay
+ * two directories; `/x/y` and `/x/y/` do not.
+ */
+const normalizeCwd = (cwd: string): string => (cwd.length > 1 && cwd.endsWith('/') ? cwd.slice(0, -1) : cwd);
 
 /**
  * Owns the engine state a daemon serves: predictor, magic-name index, and the
@@ -78,6 +99,11 @@ export class EngineHost {
    */
   private recent: string[] = [];
   private recentSeen = new Set<string>();
+  /**
+   * Timestamps per working directory, oldest first — the input for `cwds`.
+   * Maintained in the same two places as `recent`, for the same reason.
+   */
+  private cwdSamples = new Map<string, number[]>();
   private rebuilds = 0;
 
   constructor(private readonly options: EngineHostOptions) {
@@ -259,6 +285,7 @@ export class EngineHost {
     this.ino = stats?.ino ?? -1;
     this.recent = [];
     this.recentSeen = new Set();
+    this.cwdSamples = new Map();
 
     const entries: HistoryEntry[] = [];
     if (stats !== null && stats.size > 0) {
@@ -288,7 +315,10 @@ export class EngineHost {
     }
     this.entryCount = entries.length;
     // Oldest first: rememberRecent unshifts, so the newest ends up in front.
-    for (const entry of entries) this.rememberRecent(entry.line);
+    for (const entry of entries) {
+      this.rememberRecent(entry.line);
+      this.rememberCwd(entry);
+    }
     this.predictor = new Predictor(entries.filter(isSingleLine), {
       now: this.now,
       ...(this.options.fs !== undefined ? { fs: this.options.fs } : {}),
@@ -322,6 +352,7 @@ export class EngineHost {
         if (entry === null) return;
         this.entryCount++;
         this.rememberRecent(entry.line);
+        this.rememberCwd(entry);
         if (isSingleLine(entry)) this.predictor?.learn(entry);
       });
       // A partial read must not advance past what was actually consumed.
@@ -391,6 +422,57 @@ export class EngineHost {
       return;
     }
     this.namesSignature = signature;
+  }
+
+  /**
+   * Records that work happened in a directory. Called only from the two places
+   * that parse a history line — never from `learn()`, so it inherits the tail
+   * follow's "learned once, never twice" property and also sees the entries the
+   * REPL and `import` write straight to the file without asking the daemon.
+   *
+   * Imported entries carry `cwd: null` and are skipped: zsh history has no
+   * directory, and guessing one would be indistinguishable from having learned it.
+   */
+  private rememberCwd(entry: HistoryEntry): void {
+    if (entry.cwd === null) return;
+    const path = normalizeCwd(entry.cwd);
+    if (path === '') return;
+    const samples = this.cwdSamples.get(path);
+    if (samples === undefined) {
+      this.cwdSamples.set(path, [entry.ts]);
+      return;
+    }
+    samples.push(entry.ts);
+    // Both call sites feed lines in file order, so the oldest sits in front.
+    if (samples.length > MAX_CWD_SAMPLES) samples.shift();
+  }
+
+  /**
+   * Directories ranked by frecency — the chip row a GUI offers before anything
+   * is typed, since a floating window has no working directory of its own.
+   *
+   * Deliberately no "does it still exist" flag: `handleLine` runs synchronously
+   * in the daemon's single thread, so one stat on a hung network mount would
+   * block the Tab key in every open shell. The caller stats.
+   */
+  cwds(limit: number): CwdEntry[] {
+    this.refresh();
+    const now = this.now();
+    const ranked: CwdEntry[] = [];
+    for (const [path, samples] of this.cwdSamples) {
+      let score = 0;
+      // The maximum, not the last element: history.jsonl is chronological in
+      // practice, but a clock that jumped backwards would otherwise make
+      // lastUsed report something that is not the most recent use.
+      let lastUsed = 0;
+      for (const ts of samples) {
+        score += frecency(ts, now, DEFAULT_SCORING);
+        if (ts > lastUsed) lastUsed = ts;
+      }
+      ranked.push({ path, score, lastUsed });
+    }
+    ranked.sort((a, b) => b.score - a.score || b.lastUsed - a.lastUsed);
+    return ranked.slice(0, limit);
   }
 
   /** Newest-first, one entry per distinct line: a repeated command moves up

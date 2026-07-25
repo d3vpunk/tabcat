@@ -103,6 +103,12 @@ describe('protocol: request parsing', () => {
     });
   });
 
+  it('parses cwds without a cwd field', () => {
+    // A GUI asks for directories precisely because it has none to send.
+    const parsed = parseRequest(request('cwds', 'd5', String(PROTOCOL_VERSION), '7'));
+    expect(parsed).toEqual({ ok: true, request: { op: 'cwds', id: 'd5', limit: 7 } });
+  });
+
   it('parses names ops', () => {
     const list = parseRequest(request('names', 'c3', String(PROTOCOL_VERSION), 'list', '/x', '', ''));
     expect(list.ok && list.request.op === 'names' && list.request.sub).toBe('list');
@@ -126,6 +132,11 @@ describe('protocol: request parsing', () => {
     ['unknown names op', request('names', 'a1', '1', 'rename', '/x', 'gst', 'git status'), 'bad_value'],
     ['malformed handle', request('names', 'a1', '1', 'create', '/x', 'X', 'git status'), 'bad_value'],
     ['handle too short', request('names', 'a1', '1', 'create', '/x', 'gs', 'git status'), 'bad_value'],
+    ['cwds with a stray field', request('cwds', 'a1', '1', '5', '/x'), 'bad_fields'],
+    ['cwds without a limit', request('cwds', 'a1', '1'), 'bad_fields'],
+    ['cwds with a negative limit', request('cwds', 'a1', '1', '-1'), 'bad_value'],
+    ['cwds with a non-numeric limit', request('cwds', 'a1', '1', 'all'), 'bad_value'],
+    ['cwds limit above cap', request('cwds', 'a1', '1', '9999'), 'bad_value'],
   ])('rejects %s', (_label, line, code) => {
     const parsed = parseRequest(line);
     expect(parsed.ok).toBe(false);
