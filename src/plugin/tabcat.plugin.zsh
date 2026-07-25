@@ -181,7 +181,12 @@ _tabcat_spawn() {
     [[ -S $_TABCAT_SOCKET ]]
     return $?
   fi
-  (( _TABCAT_SPAWNS >= 3 )) && { _tabcat_disable "daemon could not be started"; return 1 }
+  if (( _TABCAT_SPAWNS >= 3 )); then
+    # The usual cause is a ${TABCAT_BIN} that predates the daemon command, e.g.
+    # an older global install shadowing a checkout.
+    _tabcat_disable "daemon could not be started — run '${TABCAT_BIN} daemon' to see why, or '${TABCAT_BIN} plugin init zsh --check'"
+    return 1
+  fi
   (( ++_TABCAT_SPAWNS ))
   (( $+commands[${TABCAT_BIN}] )) || { _tabcat_disable "${TABCAT_BIN} is not in PATH"; return 1 }
 

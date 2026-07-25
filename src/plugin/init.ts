@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { MAX_SOCKET_PATH, defaultSocketPath } from '../daemon/paths.js';
+import { VERSION } from '../version.js';
 
 export const MIN_NODE_MAJOR = 20;
 /** `zsocket` and `${(g::)}` both exist from 5.1; older zsh cannot run the plugin. */
@@ -28,6 +29,8 @@ source ${quoteForZsh(pluginFile)}`;
 }
 
 export interface CheckDeps {
+  /** Command the plugin spawns — `tabcat` unless TABCAT_BIN says otherwise. */
+  binary: string;
   run: (command: string, args: readonly string[]) => { status: number; stdout: string };
   readTextFile: (path: string) => string | null;
   env: NodeJS.ProcessEnv;
@@ -82,6 +85,34 @@ export function checkEnvironment(deps: CheckDeps): CheckResult {
 
   lines.push(check(deps.pluginFileExists, true, `plugin file ${deps.pluginFile}`));
 
+  // The plugin starts whatever `tabcat` PATH resolves to — not this build. An
+  // older install without the `daemon` command is the failure that looks like a
+  // broken plugin: every spawn fails and the plugin disables itself. A version
+  // comparison would not catch it (both can report the same version), so ask
+  // the binary whether it knows the command.
+  const presence = deps.run(deps.binary, ['--version']);
+  const pathVersion = presence.status === 0 ? (presence.stdout.trim().split('\n').pop() ?? '').trim() : '';
+  if (pathVersion === '') {
+    lines.push(check(false, true, `${deps.binary} not found in PATH (the plugin spawns it to start the daemon)`));
+  } else {
+    const probe = deps.run(deps.binary, ['daemon', 'status']);
+    const supportsDaemon = !probe.stdout.includes('Unknown command');
+    lines.push(
+      check(
+        supportsDaemon,
+        true,
+        supportsDaemon
+          ? `${deps.binary} in PATH is ${pathVersion} and supports \`daemon\``
+          : `${deps.binary} in PATH is ${pathVersion} and has no \`daemon\` command — the plugin cannot start a daemon (run \`npm link\` in the checkout, or npm i -g the new version)`,
+      ),
+    );
+    if (supportsDaemon && pathVersion !== VERSION) {
+      lines.push(
+        check(false, false, `${deps.binary} in PATH is ${pathVersion}, this build is ${VERSION} — the plugin uses the one in PATH`),
+      );
+    }
+  }
+
   const socketPath = defaultSocketPath(deps.env);
   lines.push(
     check(
@@ -103,6 +134,7 @@ export function checkEnvironment(deps: CheckDeps): CheckResult {
 export function defaultCheckDeps(): CheckDeps {
   const pluginFile = pluginFilePath();
   return {
+    binary: process.env['TABCAT_BIN'] ?? 'tabcat',
     run: (command, args) => {
       const result = spawnSync(command, [...args], { encoding: 'utf8' });
       return { status: result.status ?? 1, stdout: `${result.stdout ?? ''}${result.stderr ?? ''}` };

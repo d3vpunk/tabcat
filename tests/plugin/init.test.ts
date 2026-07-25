@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { VERSION } from '../../src/version.js';
 import {
   CheckDeps,
   MIN_NODE_MAJOR,
@@ -10,9 +11,12 @@ import {
 } from '../../src/plugin/init.js';
 
 const deps = (over: Partial<CheckDeps> = {}): CheckDeps => ({
+  binary: 'tabcat',
   run: (command, args) => {
     if (command === 'zsh' && args[0] === '--version') return { status: 0, stdout: 'zsh 5.9 (x86_64-apple-darwin)' };
     if (command === 'zsh' && args[0] === '-fc') return { status: 0, stdout: '' };
+    if (command === 'tabcat' && args[0] === '--version') return { status: 0, stdout: `${VERSION}\n` };
+    if (command === 'tabcat' && args[0] === 'daemon') return { status: 1, stdout: 'not running (socket /x)\n' };
     return { status: 1, stdout: '' };
   },
   readTextFile: () => 'source /somewhere/tabcat.plugin.zsh\n',
@@ -59,6 +63,59 @@ describe('plugin init: --check', () => {
     const result = checkEnvironment(deps({ run: () => ({ status: 1, stdout: '' }) }));
     expect(result.ok).toBe(false);
     expect(failing(result).join(' ')).toContain('zsh not found');
+  });
+
+  it('fails when the tabcat in PATH has no daemon command', () => {
+    // The failure that looks like a broken plugin: the plugin spawns whatever
+    // PATH resolves to, and an older install has no `daemon` command, so every
+    // spawn fails and the plugin disables itself. Both can report the same
+    // version, so the probe asks for the command instead of comparing versions.
+    const result = checkEnvironment(
+      deps({
+        run: (command, args) => {
+          if (command === 'zsh' && args[0] === '--version') return { status: 0, stdout: 'zsh 5.9' };
+          if (command === 'zsh') return { status: 0, stdout: '' };
+          if (args[0] === 'daemon') return { status: 2, stdout: 'tabcat: Unknown command: daemon\nUsage: tabcat help\n' };
+          return { status: 0, stdout: `${VERSION}\n` };
+        },
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(failing(result).join(' ')).toContain('has no `daemon` command');
+  });
+
+  it('notes a version difference without blocking', () => {
+    const result = checkEnvironment(
+      deps({
+        run: (command, args) => {
+          if (command === 'zsh' && args[0] === '--version') return { status: 0, stdout: 'zsh 5.9' };
+          if (command === 'zsh') return { status: 0, stdout: '' };
+          if (args[0] === 'daemon') return { status: 1, stdout: 'not running (socket /x)\n' };
+          return { status: 0, stdout: '9.9.9\n' };
+        },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(formatCheck(result)).toContain('note  tabcat in PATH is 9.9.9');
+  });
+
+  it('fails when tabcat is not in PATH at all', () => {
+    const result = checkEnvironment(
+      deps({
+        run: (command, args) => {
+          if (command === 'zsh' && args[0] === '--version') return { status: 0, stdout: 'zsh 5.9' };
+          if (command === 'zsh') return { status: 0, stdout: '' };
+          return { status: 127, stdout: 'command not found' };
+        },
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(failing(result).join(' ')).toContain('not found in PATH');
+  });
+
+  it('reports a custom TABCAT_BIN by name', () => {
+    const result = checkEnvironment(deps({ binary: 'tabcat-dev' }));
+    expect(failing(result).join(' ')).toContain('tabcat-dev not found in PATH');
   });
 
   it('fails on a zsh too old for zsocket', () => {
