@@ -351,7 +351,7 @@ Tail-Follow-Offset-Modell, Compaction-Ownership, Wire-Format TSV. Alle drei
 | `predict` liefert alle Kandidaten | Request hat ein `limit`-Feld (Ghost: 1, Menü: 10) | 50 Zeilen pro Keystroke lesen ist Verschwendung |
 | Ops: ping/predict/learn/names/shutdown | zusätzlich `names resolve` und `search` | Enter-Expansion braucht exakte Auflösung, `^Xq` braucht Fuzzy-Suche (nutzt `repl/history-search.ts` weiter) |
 | Names-Änderung → Full Rebuild | `NameIndex.reset()` mutiert in place, kein Rebuild | Predictor hält den Index per Referenz; 130 ms Rebuild pro fremdem Handle wären unnötig |
-| Dropdown auf Tab | Tab = Accept, Menü auf `^Xd` | Tab kann nicht gleichzeitig akzeptieren und ein Menü öffnen. compsys bleibt unangetastet |
+| Dropdown auf Tab | Tab = Accept, Menü auf `^Xv` | Tab kann nicht gleichzeitig akzeptieren und ein Menü öffnen. compsys bleibt unangetastet |
 | `^Xq` = incrementeller ZLE-Loop | Minibuffer-Query + Trefferliste via `zle -M`, bester Treffer in den BUFFER | Der volle Loop war als riskantestes Feature markiert; diese Stufe ist nutzbar und klein. Incrementell bleibt offen |
 | Socket-Pfad `$XDG_RUNTIME_DIR` | dito, plus Ownership-/Symlink-/Modus-Prüfung des Verzeichnisses | `/tmp` ist world-writable: ein vorab angelegtes `/tmp/tabcat-<uid>` eines anderen Users würde jede getippte Zeile abfangen |
 | — | `TABCAT_SOCKET` als Plugin-Override | Spiegelt `tabcat daemon --socket`, macht die pty-Tests deterministisch |
@@ -371,6 +371,11 @@ Alle in der Implementierung, nicht in den Tests:
 7. **`zsystem flock` nimmt einen Dateinamen, keinen fd** (`-f var` liefert den fd zurück) — das Spawn-Lock schlug immer fehl, jede Shell hielt sich für den Verlierer und startete nie einen Daemon
 8. **`zsystem flock` erstellt die Lock-Datei nicht** — auf einer frischen Maschine scheiterte damit der allererste Spawn
 9. **Der gespawnte Daemon starb am SIGHUP der Shell, die ihn startete** — er kann während des Node-Starts noch keinen Handler installieren. Jetzt `nohup … &!`
+
+Beim ersten echten Dogfooding kamen zwei weitere dazu:
+
+10. **`^Xd` war nie frei** (`_list_expansions` aus compinit) — in der Frei-Liste stand `d` nicht, ich hatte es beim Vorschlag trotzdem genommen. Menü liegt jetzt auf `^Xv`
+11. **Zweimal Sourcen der `.zshrc` machte den Tab-Fallback rekursiv**: der zweite Durchlauf merkte sich `tabcat-tab` als „vorheriges" Tab-Widget. Persistenter State wird jetzt ohne Wert deklariert (`typeset -g` statt `typeset -g X=''`), Bindings, die schon uns gehören, gelten als frei — Re-Sourcing ist idempotent und warnt nicht mehr
 
 ### Testabdeckung
 

@@ -161,7 +161,7 @@ prefix keep working:
 | `^Xl` | **L**abel: name the current command (magic name) |
 | `^Xf` | **F**orget the name of the current command |
 | `^Xq` | **Q**uery: fuzzy history search |
-| `^Xd` | Candidate menu (`compadd` + `menu-select`) |
+| `^Xv` | Candidate menu — **v**iew all candidates (`compadd` + `menu-select`) |
 
 **Configuration** (set before the `source` line):
 
@@ -170,7 +170,7 @@ prefix keep working:
 | `TABCAT_GHOST` | `1` | Ghost text on/off |
 | `TABCAT_BADGE` | `1` | ⚡ handle badge on/off |
 | `TABCAT_GHOST_STYLE` | `fg=8` | Highlight of the ghost text |
-| `TABCAT_KEY_LABEL` / `_FORGET` / `_QUERY` / `_MENU` | `^Xl` / `^Xf` / `^Xq` / `^Xd` | Rebind the chords |
+| `TABCAT_KEY_LABEL` / `_FORGET` / `_QUERY` / `_MENU` | `^Xl` / `^Xf` / `^Xq` / `^Xv` | Rebind the chords |
 | `TABCAT_TIMEOUT` | `0.05` | Seconds the shell waits for the daemon before falling back |
 | `TABCAT_NO_LEARN` | unset | Set to `1` to stop learning in this shell |
 | `TABCAT_SOCKET` | derived | Socket path (mirrors `tabcat daemon --socket`) |

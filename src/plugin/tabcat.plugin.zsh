@@ -42,7 +42,7 @@ autoload -Uz add-zsh-hook read-from-minibuffer
 : ${TABCAT_KEY_LABEL:='^Xl'}
 : ${TABCAT_KEY_FORGET:='^Xf'}
 : ${TABCAT_KEY_QUERY:='^Xq'}
-: ${TABCAT_KEY_MENU:='^Xd'}
+: ${TABCAT_KEY_MENU:='^Xv'}
 : ${TABCAT_GHOST:=1}
 : ${TABCAT_GHOST_STYLE:='fg=8'}
 : ${TABCAT_BADGE:=1}
@@ -63,17 +63,22 @@ autoload -Uz add-zsh-hook read-from-minibuffer
 : ${TABCAT_SPAWN_GRACE:=3}
 
 typeset -g _TABCAT_PROTOCOL=1
-typeset -g _TABCAT_FD=0
-typeset -gi _TABCAT_SEQ=0
+# Declared WITHOUT a value: re-sourcing .zshrc must not reset an open fd, the
+# spawn bookkeeping, or the remembered Tab binding — a reset would leak the fd
+# and make the Tab fallback point at tabcat-tab itself.
+typeset -g _TABCAT_FD
+typeset -gi _TABCAT_SEQ
+typeset -gi _TABCAT_SPAWNS
+typeset -gF _TABCAT_SPAWN_AT
+typeset -g _TABCAT_LOCKFD
+typeset -g _TABCAT_ORIG_TAB
+: ${_TABCAT_FD:=0}
+# Re-sourcing is also how a user retries after the plugin disabled itself.
 typeset -gi _TABCAT_OFF=0
-typeset -gi _TABCAT_SPAWNS=0
-typeset -gF _TABCAT_SPAWN_AT=0
-typeset -g _TABCAT_LOCKFD=''
 typeset -g _TABCAT_SOCKET=''
 typeset -g _TABCAT_GHOST_TEXT=''
 typeset -g _TABCAT_PENDING_LINE=''
 typeset -g _TABCAT_PENDING_CWD=''
-typeset -g _TABCAT_ORIG_TAB=''
 typeset -ga _TABCAT_ROWS=()
 typeset -ga _TABCAT_UNDO_BUFFERS=()
 typeset -ga _TABCAT_UNDO_CURSORS=()
@@ -719,10 +724,12 @@ _tabcat_wrap_widget() {
 # Conflict detection
 # ---------------------------------------------------------------------------
 
-_tabcat_key_is_free() {
+# Free, or already ours: re-sourcing .zshrc must not warn about bindings this
+# plugin installed itself.
+_tabcat_key_available() {
   local key=$1
   local -a binding=(${(z)"$(bindkey $key)"})
-  [[ ${#binding} -lt 2 || ${binding[2]} == undefined-key ]]
+  [[ ${#binding} -lt 2 || ${binding[2]} == undefined-key || ${binding[2]} == tabcat-* ]]
 }
 
 _tabcat_report_conflicts() {
@@ -758,10 +765,13 @@ _tabcat_setup() {
   _tabcat_report_conflicts || return 1
 
   # Remember who owned Tab before us so the fallback can hand the key back.
+  # Re-sourcing .zshrc would otherwise capture tabcat-tab itself and turn the
+  # fallback into infinite recursion.
   local -a tab_binding=(${(z)"$(bindkey '^I')"})
-  if [[ ${#tab_binding} -ge 2 && ${tab_binding[2]} != undefined-key ]]; then
-    _TABCAT_ORIG_TAB=${tab_binding[2]}
-  else
+  local previous=${tab_binding[2]:-}
+  if [[ ${#tab_binding} -ge 2 && $previous != undefined-key && $previous != tabcat-* ]]; then
+    _TABCAT_ORIG_TAB=$previous
+  elif [[ -z $_TABCAT_ORIG_TAB || $_TABCAT_ORIG_TAB == tabcat-* ]]; then
     _TABCAT_ORIG_TAB=expand-or-complete
   fi
 
@@ -802,7 +812,7 @@ _tabcat_setup() {
   for chord in ${(k)chords}; do
     [[ -z $chord ]] && continue
     zle -l ${chords[$chord]} 2>/dev/null || continue
-    if _tabcat_key_is_free $chord || [[ -n ${TABCAT_FORCE:-} ]]; then
+    if _tabcat_key_available $chord || [[ -n ${TABCAT_FORCE:-} ]]; then
       bindkey $chord ${chords[$chord]}
     else
       print -u2 "tabcat: $chord is already bound — skipped (rebind via TABCAT_KEY_*)"

@@ -137,14 +137,14 @@ describe.skipIf(!zsh)('plugin: setup wiring', () => {
       bindkey '^Xl'
       bindkey '^Xf'
       bindkey '^Xq'
-      bindkey '^Xd'
+      bindkey '^Xv'
     `);
     expect(out).toContain('"^I" tabcat-tab');
     expect(out).toContain('"^M" tabcat-accept-line');
     expect(out).toContain('"^Xl" tabcat-label');
     expect(out).toContain('"^Xf" tabcat-forget');
     expect(out).toContain('"^Xq" tabcat-query');
-    expect(out).toContain('"^Xd" tabcat-menu');
+    expect(out).toContain('"^Xv" tabcat-menu');
   });
 
   it('leaves the zsh defaults on ^N, ^R and the ^X prefix alone', () => {
@@ -219,6 +219,32 @@ describe.skipIf(!zsh)('plugin: setup wiring', () => {
 
     const forced = inspect('print "off=$_TABCAT_OFF"', { pre, env: { TABCAT_FORCE: '1' } });
     expect(forced).toContain('off=0');
+  });
+
+  it('survives being sourced twice without warning or recursion', () => {
+    // Re-sourcing .zshrc is routine. The second pass must not warn about its own
+    // bindings, and must not capture tabcat-tab as the Tab fallback — that would
+    // make the fallback call itself forever.
+    const out = inspect(`
+      source ${PLUGIN_FILE}
+      print "orig=$_TABCAT_ORIG_TAB"
+      bindkey '^I'
+      bindkey '^Xl'
+      print "self-insert=\${widgets[self-insert]}"
+    `);
+    expect(out).toContain('orig=expand-or-complete');
+    expect(out).toContain('"^I" tabcat-tab');
+    expect(out).toContain('"^Xl" tabcat-label');
+    // Wrapped once, not wrapped around its own wrapper.
+    expect(out).toContain('self-insert=user:_tabcat_wrapped_self-insert');
+    expect(out).not.toContain('is already bound');
+  });
+
+  it('keeps a foreign Tab binding as the fallback across a re-source', () => {
+    const out = inspect(`source ${PLUGIN_FILE}\nprint "orig=$_TABCAT_ORIG_TAB"`, {
+      pre: `foreign-tab() { : }\nzle -N foreign-tab\nbindkey '^I' foreign-tab`,
+    });
+    expect(out).toContain('orig=foreign-tab');
   });
 
   it('registers the learning hooks', () => {
