@@ -41,9 +41,71 @@ describe.skipIf(!zsh)('plugin: privacy filter', () => {
     expect(shouldLearn('git status', '', { TABCAT_NO_LEARN: '1' })).toBe(false);
   });
 
+  it('treats TABCAT_NO_LEARN=0 as off, like the other switches', () => {
+    // Same polarity as TABCAT_GHOST=0 / TABCAT_BADGE=0; testing for "non-empty"
+    // made =0 mean "on", the opposite of what it reads like.
+    expect(shouldLearn('git status', '', { TABCAT_NO_LEARN: '0' })).toBe(true);
+  });
+
   it('skips blank input', () => {
     expect(shouldLearn('')).toBe(false);
     expect(shouldLearn('   \t ')).toBe(false);
+  });
+});
+
+describe.skipIf(!zsh)('plugin: hostile shell options', () => {
+  // Users set these; a plugin that does not isolate itself either spams errors
+  // per keystroke (nounset) or goes silently inert (sh_word_split, ksh_arrays).
+  const ghostUnder = (options: string): string => {
+    const script = withPlugin(`
+      setopt ${options}
+      BUFFER='git ' CURSOR=4
+      # Fake daemon answer: one candidate, so no socket is needed.
+      _tabcat_predict() { _TABCAT_ROWS=($'ok\tz1\t\t' $'status\tstatus\thistory\t\t0'); return 0 }
+      _tabcat_ghost
+      print -r -- "post=[$POSTDISPLAY]"
+    `);
+    const result = runZsh(script);
+    return `${result.stdout}${result.stderr}`;
+  };
+
+  it.each(['nounset', 'sh_word_split', 'ksh_arrays', 'extended_glob', 'nomatch', 'correct', 'no_multibyte'])(
+    'renders a ghost with %s set',
+    (option) => {
+      const out = ghostUnder(option);
+      expect(out).toContain('post=[status]');
+      // No error output either — nounset used to print once per keystroke.
+      expect(out).not.toMatch(/parameter not set|not valid/);
+    },
+  );
+
+  it('learns with sh_word_split set', () => {
+    // _tabcat_esc $BUFFER truncated the line at the first space.
+    const script = withPlugin(`
+      setopt sh_word_split
+      _tabcat_esc "git commit -m fix"
+      print -r -- "escaped=[$REPLY]"
+    `);
+    expect(runZsh(script).stdout.trim()).toBe('escaped=[git commit -m fix]');
+  });
+});
+
+describe.skipIf(!zsh)('plugin: messages', () => {
+  it('uses zle -M inside a widget instead of writing to stderr', () => {
+    // stderr from inside a widget lands on the command line and wrecks the
+    // prompt display mid-typing.
+    const script = withPlugin(`
+      zle() { print -r -- "zle $*" }
+      WIDGET=self-insert
+      _tabcat_notify "something happened"
+    `);
+    expect(runZsh(script).stdout.trim()).toBe('zle -M tabcat: something happened');
+  });
+
+  it('prints to stderr when no widget is running', () => {
+    const result = runZsh(withPlugin('_tabcat_notify "at load time"'));
+    expect(result.stderr.trim()).toBe('tabcat: at load time');
+    expect(result.stdout).toBe('');
   });
 });
 
@@ -176,6 +238,28 @@ describe.skipIf(!zsh)('plugin: setup wiring', () => {
   it('does not touch completion widgets', () => {
     const out = inspect(`print "expand-or-complete=\${widgets[expand-or-complete]}"`);
     expect(out).toContain('expand-or-complete=builtin');
+  });
+
+  it('remembers who owned Shift+Tab and the right arrow', () => {
+    // oh-my-zsh binds Shift+Tab to reverse-menu-complete; those keys are taken
+    // unconditionally, so the widgets have to be able to hand them back.
+    const out = inspect('print "shift=[$_TABCAT_ORIG_SHIFT_TAB] forward=[$_TABCAT_ORIG_FORWARD]"', {
+      pre: `foreign-reverse() { : }\nzle -N foreign-reverse\nbindkey -M emacs "\${terminfo[kcbt]:-^[[Z}" foreign-reverse`,
+    });
+    expect(out).toContain('shift=[foreign-reverse]');
+    expect(out).toContain('forward=[forward-char]');
+  });
+
+  it('delegates Shift+Tab when there is nothing of ours to undo', () => {
+    const out = inspect(`
+      _TABCAT_ORIG_SHIFT_TAB=foreign-reverse
+      _TABCAT_UNDO_BUFFERS=()
+      zle() { print -r -- "zle $*" }
+      tabcat-undo-accept
+    `);
+    // Delegated, not swallowed with a message.
+    expect(out).toContain('zle foreign-reverse');
+    expect(out).not.toContain('nothing to undo');
   });
 
   it('remembers whoever owned Tab before it', () => {

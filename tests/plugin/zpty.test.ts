@@ -327,7 +327,10 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
     const [first, later, cleared] = probe();
     // One entry, never a growing list.
     expect(first).toContain('hl=1');
-    expect(later).toMatch(/^hl=1 items=\(P0 \d+ fg=8\)$/);
+    // Buffer-relative offsets, NOT `P0 n`: with the P prefix the offsets count
+    // from the start of the whole display, so `P0 n` dims the first n characters
+    // of what the user typed and leaves the suggestion in normal colour.
+    expect(later).toMatch(/^hl=1 items=\(\d+ \d+ fg=8\)$/);
     // Ghost gone -> its highlight gone, and nobody else's entries were touched.
     expect(cleared).toBe('hl=0 items=()');
   });
@@ -346,7 +349,7 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
     `,
       { term: 'xterm' },
     );
-    expect(probe()[0]).toMatch(/^hl=1 items=\(P0 \d+ underline\)$/);
+    expect(probe()[0]).toMatch(/^hl=1 items=\(\d+ \d+ underline\)$/);
   });
 
   it('expands a magic name typed with surrounding whitespace', async () => {
@@ -362,6 +365,68 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
       zpty -d tc
     `);
     expect(existsSync(join(dir, 'spaced.marker'))).toBe(true);
+  });
+
+  it('never accepts a ghost that belongs to an older line', async () => {
+    // Esc-. (insert-last-word) is a zsh default and is not one of the widgets we
+    // wrap: it changed BUFFER while the old suggestion stayed on screen, and the
+    // right arrow then inserted text the user was never shown for this line.
+    writeHistory(entry('echo undo-me', 1_700_000_000_000), entry('echo undo-me', 1_700_000_000_001));
+    await startRealDaemon();
+    await runPty(`
+      pty_start || exit 1
+      type_keys 'echo u'
+      press_probe
+      type_keys $'\e.'
+      press_probe
+      type_keys $'\e[C'
+      press_probe
+      zpty -d tc
+    `);
+    const [withGhost, afterInsertWord, afterArrow] = probe();
+    expect(withGhost).toBe('buf=[echo u] cur=6 post=[ndo-me] off=0');
+    // Stale ghost gone as soon as the buffer changed under us.
+    expect(afterInsertWord).toContain('post=[]');
+    // And the arrow key did not paste it in.
+    expect(afterArrow).not.toContain('ndo-me]');
+  });
+
+  it('brings the suggestion back after left then right', async () => {
+    writeHistory(entry('echo undo-me', 1_700_000_000_000), entry('echo undo-me', 1_700_000_000_001));
+    await startRealDaemon();
+    await runPty(`
+      pty_start || exit 1
+      type_keys 'echo u'
+      type_keys $'\\e[D'
+      press_probe
+      type_keys $'\\e[C'
+      press_probe
+      zpty -d tc
+    `);
+    const [midLine, backAtEnd] = probe();
+    expect(midLine).toBe('buf=[echo u] cur=5 post=[] off=0');
+    expect(backAtEnd).toBe('buf=[echo u] cur=6 post=[ndo-me] off=0');
+  });
+
+  it('shows no suggestion inside its own handle prompt', async () => {
+    // read-from-minibuffer sets PREDISPLAY; a ghost there offers a shell command
+    // as the answer to "which handle?".
+    writeHistory(entry('deploy staging alpha', 1_700_000_000_000), entry('deploy staging alpha', 1_700_000_000_001));
+    await startRealDaemon();
+    await runPty(`
+      pty_start || exit 1
+      type_keys 'deploy staging alpha'
+      press_probe
+      type_keys $'\\C-Xl'
+      pump 0.4
+      type_keys 'de'
+      press_probe
+      zpty -d tc
+    `);
+    const [onLine, inPrompt] = probe();
+    expect(onLine).toContain('post=[');
+    // Inside the minibuffer: no ghost, no badge.
+    expect(inPrompt).toContain('post=[]');
   });
 
   it('learns an executed command through the precmd hook', async () => {

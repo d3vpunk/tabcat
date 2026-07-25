@@ -85,11 +85,21 @@ typeset -gi _TABCAT_SPAWNS
 typeset -gF _TABCAT_SPAWN_AT
 typeset -g _TABCAT_LOCKFD
 typeset -g _TABCAT_ORIG_TAB
+typeset -g _TABCAT_ORIG_SHIFT_TAB
+typeset -g _TABCAT_ORIG_FORWARD
 : ${_TABCAT_FD:=0}
 # Re-sourcing is also how a user retries after the plugin disabled itself.
 typeset -gi _TABCAT_OFF=0
 typeset -g _TABCAT_SOCKET=''
 typeset -g _TABCAT_GHOST_TEXT=''
+# What the ghost was computed from. A widget outside TABCAT_FETCH_WIDGETS can
+# change BUFFER without us noticing; accepting a ghost computed for a different
+# line would insert nonsense.
+typeset -g _TABCAT_GHOST_BUFFER=''
+typeset -gi _TABCAT_GHOST_CURSOR=-1
+# The exact region_highlight entry we appended, so it can be removed again.
+typeset -g _TABCAT_HL_ENTRY=''
+typeset -gi _TABCAT_HL_INDEX=0
 typeset -g _TABCAT_PENDING_LINE=''
 typeset -g _TABCAT_PENDING_CWD=''
 typeset -ga _TABCAT_ROWS=()
@@ -116,6 +126,13 @@ typeset -ga TABCAT_FETCH_WIDGETS=(
   undo redo
   bracketed-paste
   magic-space
+  # vi mode has its own editing widgets; without these the ghost would go stale
+  # after every Backspace in viins.
+  vi-backward-delete-char vi-delete-char vi-delete vi-change vi-change-eol
+  vi-forward-word vi-backward-word vi-forward-char vi-backward-char
+  vi-beginning-of-line vi-end-of-line vi-insert vi-insert-bol vi-add-next
+  vi-put-after vi-put-before vi-kill-line vi-kill-eol vi-undo-change
+  insert-last-word
 )
 
 # ---------------------------------------------------------------------------
@@ -156,10 +173,19 @@ _tabcat_disable() {
   (( _TABCAT_OFF )) && return 0
   _TABCAT_OFF=1
   _tabcat_drop_fd
-  # $WIDGET only exists inside a zle widget; assigning POSTDISPLAY outside one
-  # would just leave a stray global behind.
-  (( ${+WIDGET} )) && POSTDISPLAY=''
-  print -u2 "tabcat: $1 — plugin disabled for this shell."
+  _tabcat_notify "$1 — plugin disabled for this shell."
+  return 0
+}
+
+# Inside a widget, stderr goes straight onto the command line and wrecks the
+# prompt display mid-typing. zle -M is the channel meant for this.
+_tabcat_notify() {
+  if (( ${+WIDGET} )); then
+    POSTDISPLAY=''
+    zle -M "tabcat: $1"
+  else
+    print -u2 "tabcat: $1"
+  fi
   return 0
 }
 
@@ -278,9 +304,9 @@ _tabcat_warm_daemon() {
 _tabcat_connect() {
   (( _TABCAT_OFF )) && return 1
   [[ $_TABCAT_FD != 0 ]] && return 0
-  if ! zsocket $_TABCAT_SOCKET 2>/dev/null; then
+  if ! zsocket "$_TABCAT_SOCKET" 2>/dev/null; then
     _tabcat_spawn || return 1
-    zsocket $_TABCAT_SOCKET 2>/dev/null || return 1
+    zsocket "$_TABCAT_SOCKET" 2>/dev/null || return 1
   fi
   _TABCAT_FD=$REPLY
   return 0
@@ -289,6 +315,7 @@ _tabcat_connect() {
 # Sends one request and fills _TABCAT_ROWS with the response rows (raw, still
 # escaped). Returns non-zero on any problem — callers fall back silently.
 _tabcat_request() {
+  emulate -L zsh
   (( _TABCAT_OFF )) && return 1
   _tabcat_connect || return 1
 
@@ -375,14 +402,36 @@ _tabcat_header_handle() {
 # and leave stale lengths behind once the ghost changes or disappears.
 # Buffer-relative entries (zsh-syntax-highlighting) never start with 'P', and
 # zsh-autosuggestions — the other POSTDISPLAY user — is refused at load.
+# Removes the entry we appended, and only that one. zle keeps region_highlight
+# across widget calls, so appending one per keystroke would grow the array for a
+# whole line edit and leave stale ranges behind.
+#
+# Matching by value alone is not enough: zle SHIFTS the offsets of existing
+# entries when the buffer changes, so an entry stored as `1 184 fg=8` reads
+# `2 185 fg=8` one keystroke later. Hence two attempts — the stored string (valid
+# when we clear before the buffer changes, which the widget wrapper does), then
+# the remembered position, guarded by our own style so a foreign entry that moved
+# into that slot is left alone.
 _tabcat_clear_highlight() {
-  (( ${#region_highlight} )) && region_highlight=("${(@)region_highlight:#P0 *}")
+  if (( ${#region_highlight} )); then
+    if [[ -n $_TABCAT_HL_ENTRY ]]; then
+      region_highlight=("${(@)region_highlight:#$_TABCAT_HL_ENTRY}")
+    fi
+    if (( _TABCAT_HL_INDEX > 0 && _TABCAT_HL_INDEX <= ${#region_highlight} )); then
+      [[ ${region_highlight[_TABCAT_HL_INDEX]} == *" ${TABCAT_GHOST_STYLE}" ]] &&
+        region_highlight[_TABCAT_HL_INDEX]=()
+    fi
+  fi
+  _TABCAT_HL_ENTRY=''
+  _TABCAT_HL_INDEX=0
   return 0
 }
 
 _tabcat_clear_ghost() {
   POSTDISPLAY=''
   _TABCAT_GHOST_TEXT=''
+  _TABCAT_GHOST_BUFFER=''
+  _TABCAT_GHOST_CURSOR=-1
   _tabcat_clear_highlight
 }
 
@@ -390,6 +439,29 @@ _tabcat_clear_ghost() {
 # So a candidate whose `display` corrects what was typed ("doc" -> "Documents/")
 # gets NO ghost: appending its remainder would show "docuMents"-style nonsense
 # that differs from what Tab actually inserts. Tab and the menu still offer it.
+# Is the ghost still describing THIS line? A widget we do not wrap (insert-last-word
+# on Esc-., a vi editing widget, isearch, fzf) can change BUFFER without us
+# refreshing, and accepting a ghost computed for the old line would insert text
+# the user never saw offered.
+# Provenance, not content: a badge-only POSTDISPLAY (a named command with no
+# suggestion left to add) has an empty ghost text and is still perfectly fresh.
+# The buffer is compared with a quoted RHS — an unquoted one would be a pattern.
+_tabcat_ghost_is_fresh() {
+  (( _TABCAT_GHOST_CURSOR >= 0 )) &&
+    [[ $BUFFER == "$_TABCAT_GHOST_BUFFER" && $CURSOR == $_TABCAT_GHOST_CURSOR ]]
+}
+
+# Calls the widget that owned a key before us, falling back to a builtin.
+_tabcat_delegate() {
+  local previous=$1 fallback=${2:-}
+  if [[ -n $previous && $previous != tabcat-* ]] && zle -l $previous 2>/dev/null; then
+    zle $previous
+  elif [[ -n $fallback ]]; then
+    zle $fallback
+  fi
+  return 0
+}
+
 # Sets REPLY instead of printing: this runs on every keystroke, and a command
 # substitution would fork a subshell each time.
 _tabcat_ghost_for_candidate() {
@@ -407,9 +479,13 @@ _tabcat_ghost_for_candidate() {
 }
 
 _tabcat_ghost() {
+  emulate -L zsh
   _tabcat_clear_ghost
   (( TABCAT_GHOST )) || return 0
   (( _TABCAT_OFF )) && return 0
+  # Not inside read-from-minibuffer / vared / recursive-edit: the ghost would
+  # offer a shell command as an answer to tabcat's own handle prompt.
+  [[ -n ${PREDISPLAY:-} || -n ${_TABCAT_IN_PROMPT:-} ]] && return 0
   [[ -z $BUFFER ]] && return 0
   (( ${#BUFFER} > TABCAT_MAX_LINE )) && return 0
   # Only at the end of the line: a ghost behind a mid-line cursor is noise.
@@ -430,10 +506,21 @@ _tabcat_ghost() {
   fi
 
   _TABCAT_GHOST_TEXT=$ghost
+  _TABCAT_GHOST_BUFFER=$BUFFER
+  _TABCAT_GHOST_CURSOR=$CURSOR
   # One writer for POSTDISPLAY: ghost and badge are composed, never appended
   # by two independent code paths.
   POSTDISPLAY="${ghost}${badge}"
-  [[ -n $POSTDISPLAY ]] && region_highlight+=("P0 ${#POSTDISPLAY} ${TABCAT_GHOST_STYLE}")
+  if [[ -n $POSTDISPLAY ]]; then
+    # Offsets are relative to BUFFER and may reach into POSTDISPLAY. A `P`
+    # prefix would make them relative to the whole DISPLAY instead — `P0 n`
+    # greys the first n characters of what the user typed and leaves the
+    # suggestion in the normal colour, which reads exactly like the ghost and
+    # the typed text having been mixed up.
+    _TABCAT_HL_ENTRY="${#BUFFER} $(( ${#BUFFER} + ${#POSTDISPLAY} )) ${TABCAT_GHOST_STYLE}"
+    region_highlight+=("$_TABCAT_HL_ENTRY")
+    _TABCAT_HL_INDEX=${#region_highlight}
+  fi
   # Explicit success: a widget that returns non-zero makes zle beep, and "no
   # suggestion for this line" is not an error.
   return 0
@@ -467,9 +554,21 @@ _tabcat_lone_word() {
   return 0
 }
 
+# Last line of defence for the ghost: any widget we do not wrap (insert-last-word,
+# a vi editing widget, isearch, fzf) can change BUFFER without us refreshing.
+# Showing a suggestion that belongs to a different line is worse than none.
+_tabcat_pre_redraw() {
+  (( _TABCAT_OFF )) && return 0
+  [[ -z $POSTDISPLAY ]] && return 0
+  _tabcat_ghost_is_fresh && return 0
+  _tabcat_clear_ghost
+  return 0
+}
+
 # Fresh prompt: the accept-undo stack belongs to one line. Without this,
 # Shift+Tab on an empty prompt would restore the previous command's buffer.
 _tabcat_reset_line() {
+  emulate -L zsh
   _TABCAT_UNDO_BUFFERS=()
   _TABCAT_UNDO_CURSORS=()
   _tabcat_clear_ghost
@@ -488,6 +587,7 @@ _tabcat_apply() {
 }
 
 tabcat-tab() {
+  emulate -L zsh
   if (( ${#BUFFER} > TABCAT_MAX_LINE )); then
     _tabcat_fallback_tab
     return
@@ -523,8 +623,12 @@ _tabcat_fallback_tab() {
 # One chunk instead of the whole suggestion — the arrow key equivalent of the
 # REPL's forward accept.
 tabcat-forward-chunk() {
-  if (( CURSOR < ${#BUFFER} )) || [[ -z $_TABCAT_GHOST_TEXT ]]; then
-    zle .forward-char
+  emulate -L zsh
+  if (( CURSOR < ${#BUFFER} )) || [[ -z $_TABCAT_GHOST_TEXT ]] || ! _tabcat_ghost_is_fresh; then
+    _tabcat_delegate $_TABCAT_ORIG_FORWARD .forward-char
+    # The ghost was cleared when the cursor left the end of the line; coming
+    # back has to bring it up again.
+    _tabcat_ghost
     return
   fi
   local ghost=$_TABCAT_GHOST_TEXT
@@ -541,8 +645,12 @@ tabcat-forward-chunk() {
 }
 
 tabcat-undo-accept() {
+  emulate -L zsh
   if (( ${#_TABCAT_UNDO_BUFFERS} == 0 )); then
-    zle -M "tabcat: nothing to undo"
+    # Nothing of ours to undo: hand the key back to whoever had it. oh-my-zsh
+    # binds Shift+Tab to reverse-menu-complete, and swallowing that with a
+    # message would be a silent regression for every omz user.
+    _tabcat_delegate $_TABCAT_ORIG_SHIFT_TAB
     return
   fi
   BUFFER=${_TABCAT_UNDO_BUFFERS[-1]}
@@ -555,15 +663,16 @@ tabcat-undo-accept() {
 # Enter: expand an exact magic-name handle before running it. This has to be a
 # widget — preexec runs after the command line is fixed and cannot rewrite it.
 tabcat-accept-line() {
+  emulate -L zsh
   _tabcat_reset_line
   local REPLY
   _tabcat_lone_word
   local candidate=$REPLY
   if [[ $candidate =~ '^[a-z][a-z0-9]{2,15}$' ]]; then
     local cwd handle
-    _tabcat_esc $PWD; cwd=$REPLY
-    _tabcat_esc $candidate; handle=$REPLY
-    if _tabcat_request names resolve $cwd $handle ''; then
+    _tabcat_esc "$PWD"; cwd=$REPLY
+    _tabcat_esc "$candidate"; handle=$REPLY
+    if _tabcat_request names resolve "$cwd" "$handle" ''; then
       local -a header=("${(@ps:\t:)_TABCAT_ROWS[1]}")
       _tabcat_dec ${header[3]:-}
       [[ -n $REPLY ]] && BUFFER=$REPLY && CURSOR=${#BUFFER}
@@ -573,12 +682,14 @@ tabcat-accept-line() {
 }
 
 tabcat-label() {
+  emulate -L zsh
   local line=$BUFFER
   if [[ -z ${line//[[:space:]]/} ]]; then
     zle -M "tabcat: nothing to name"
     return
   fi
   local REPLY
+  local _TABCAT_IN_PROMPT=1
   read-from-minibuffer "tabcat handle (3-16, a-z0-9): " || return
   local handle=${REPLY//[[:space:]]/}
   [[ -z $handle ]] && return
@@ -587,11 +698,11 @@ tabcat-label() {
     return
   fi
   local cwd escaped
-  _tabcat_esc $PWD; cwd=$REPLY
-  _tabcat_esc $line; escaped=$REPLY
+  _tabcat_esc "$PWD"; cwd=$REPLY
+  _tabcat_esc "$line"; escaped=$REPLY
   local escaped_handle
-  _tabcat_esc $handle; escaped_handle=$REPLY
-  if _tabcat_request names create $cwd $escaped_handle $escaped; then
+  _tabcat_esc "$handle"; escaped_handle=$REPLY
+  if _tabcat_request names create "$cwd" "$escaped_handle" "$escaped"; then
     zle -M "tabcat: ⚡$handle -> $line"
   else
     local -a header=("${(@ps:\t:)_TABCAT_ROWS[1]:-}")
@@ -601,19 +712,20 @@ tabcat-label() {
 }
 
 tabcat-forget() {
+  emulate -L zsh
   local target=$BUFFER
   local REPLY cwd
   _tabcat_lone_word
   local candidate=$REPLY
-  _tabcat_esc $PWD; cwd=$REPLY
+  _tabcat_esc "$PWD"; cwd=$REPLY
   # A handle in the buffer is forgotten by resolving it first — the tombstone
   # is keyed on the command line, not on the handle.
   if [[ $candidate =~ '^[a-z][a-z0-9]{2,15}$' ]]; then
     local escaped_handle
-    _tabcat_esc $candidate; escaped_handle=$REPLY
-    if _tabcat_request names resolve $cwd $escaped_handle ''; then
+    _tabcat_esc "$candidate"; escaped_handle=$REPLY
+    if _tabcat_request names resolve "$cwd" "$escaped_handle" ''; then
       local -a header=("${(@ps:\t:)_TABCAT_ROWS[1]}")
-      _tabcat_dec ${header[3]:-}
+      _tabcat_dec "${header[3]:-}"
       [[ -n $REPLY ]] && target=$REPLY
     fi
   fi
@@ -622,8 +734,8 @@ tabcat-forget() {
     return
   fi
   local escaped
-  _tabcat_esc $target; escaped=$REPLY
-  if _tabcat_request names delete $cwd '' $escaped; then
+  _tabcat_esc "$target"; escaped=$REPLY
+  if _tabcat_request names delete "$cwd" '' "$escaped"; then
     local -a header=("${(@ps:\t:)_TABCAT_ROWS[1]}")
     if [[ ${header[3]} == deleted ]]; then
       zle -M "tabcat: forgot the handle for $target"
@@ -639,12 +751,14 @@ tabcat-forget() {
 # Fuzzy history: same ranking as the REPL's own search. Not an incremental
 # loop yet — a query, the best hit in the buffer, the alternatives listed.
 tabcat-query() {
+  emulate -L zsh
   local REPLY
+  local _TABCAT_IN_PROMPT=1
   read-from-minibuffer "tabcat search: " || return
   local query=$REPLY cwd escaped
-  _tabcat_esc $PWD; cwd=$REPLY
-  _tabcat_esc $query; escaped=$REPLY
-  if ! _tabcat_request search $TABCAT_SEARCH_LIMIT $cwd $escaped; then
+  _tabcat_esc "$PWD"; cwd=$REPLY
+  _tabcat_esc "$query"; escaped=$REPLY
+  if ! _tabcat_request search "$TABCAT_SEARCH_LIMIT" "$cwd" "$escaped"; then
     zle -M "tabcat: search unavailable"
     return
   fi
@@ -655,8 +769,8 @@ tabcat-query() {
   local -a hits=()
   local i
   for (( i = 2; i <= ${#_TABCAT_ROWS}; i++ )); do
-    _tabcat_dec ${_TABCAT_ROWS[$i]}
-    hits+=($REPLY)
+    _tabcat_dec "${_TABCAT_ROWS[$i]}"
+    hits+=("$REPLY")
   done
   _tabcat_push_undo
   BUFFER=${hits[1]}
@@ -668,6 +782,7 @@ tabcat-query() {
 # Candidate list as a real completion menu: compadd + menu-select, so the
 # user's complist settings and key bindings apply unchanged.
 _tabcat_menu_completer() {
+  emulate -L zsh
   _tabcat_predict $TABCAT_MENU_LIMIT || return 1
   (( ${#_TABCAT_ROWS} > 1 )) || return 1
   local -a displays=()
@@ -675,7 +790,7 @@ _tabcat_menu_completer() {
   local _TABCAT_C_INSERT _TABCAT_C_DISPLAY _TABCAT_C_SOURCE _TABCAT_C_NAME _TABCAT_C_REPLACE
   for (( i = 2; i <= ${#_TABCAT_ROWS}; i++ )); do
     _tabcat_candidate $i
-    [[ -n $_TABCAT_C_DISPLAY ]] && displays+=($_TABCAT_C_DISPLAY)
+    [[ -n $_TABCAT_C_DISPLAY ]] && displays+=("$_TABCAT_C_DISPLAY")
   done
   (( ${#displays} )) || return 1
   compstate[insert]=menu
@@ -691,13 +806,20 @@ _tabcat_menu_completer() {
 # in tabcat's history either. A leading space with hist_ignore_space is the
 # standard way to hide a secret; HISTORY_IGNORE is the pattern form.
 _tabcat_should_learn() {
+  # Option state has to be read BEFORE emulate resets everything to zsh
+  # defaults — hist_ignore_space would otherwise always look unset.
+  local -i ignore_space=0 no_store=0
+  [[ -o hist_ignore_space ]] && ignore_space=1
+  [[ -o hist_no_store ]] && no_store=1
+  emulate -L zsh
   local line=$1
-  [[ -n ${TABCAT_NO_LEARN:-} ]] && return 1
+  # `=0` means off, same polarity as TABCAT_GHOST and TABCAT_BADGE.
+  [[ -n ${TABCAT_NO_LEARN:-} && ${TABCAT_NO_LEARN} != 0 ]] && return 1
   [[ -z ${line//[[:space:]]/} ]] && return 1
-  if [[ -o hist_ignore_space && $line == [[:space:]]* ]]; then
+  if (( ignore_space )) && [[ $line == [[:space:]]* ]]; then
     return 1
   fi
-  if [[ -o hist_no_store ]]; then
+  if (( no_store )); then
     # Array context on purpose: ${${(z)line}[1]} indexes the joined string and
     # would yield the first CHARACTER.
     local -a words=(${(z)line})
@@ -713,8 +835,14 @@ _tabcat_should_learn() {
 # attributed to the directory the command changed into. tabcat learns where a
 # command was typed.
 _tabcat_preexec() {
+  emulate -L zsh
   _TABCAT_PENDING_LINE=$1
   _TABCAT_PENDING_CWD=$PWD
+  # zsocket's fd has no close-on-exec: every child would inherit the protocol
+  # stream (one stray `echo >&3` desyncs it) and a background job would hold a
+  # daemon connection open after this shell is gone — the daemon caps them.
+  # Reconnecting on the next request costs no fork.
+  _tabcat_drop_fd
 }
 
 _tabcat_precmd() {
@@ -744,11 +872,11 @@ _tabcat_precmd() {
   (( ts > 0 )) || return 0
 
   local REPLY escaped_line escaped_cwd
-  _tabcat_esc $line; escaped_line=$REPLY
-  _tabcat_esc ${cwd:-$PWD}; escaped_cwd=$REPLY
+  _tabcat_esc "$line"; escaped_line=$REPLY
+  _tabcat_esc "${cwd:-$PWD}"; escaped_cwd=$REPLY
   # Fire and forget: the answer is read (an unread response would desync the
   # fd) but any failure is silent. The prompt never waits on this.
-  _tabcat_request learn $exit_code $ts $escaped_cwd $escaped_line >/dev/null 2>&1
+  _tabcat_request learn "$exit_code" "$ts" "$escaped_cwd" "$escaped_line" >/dev/null 2>&1
   return 0
 }
 
@@ -759,6 +887,10 @@ _tabcat_precmd() {
 _tabcat_after_widget() {
   local original=$1 post=$2
   shift 2
+  # Drop our highlight BEFORE the buffer changes: zle shifts the offsets of
+  # existing entries as the buffer grows, so afterwards the stored string no
+  # longer matches what is in the array.
+  _tabcat_clear_highlight
   local outcome=0
   zle $original -- "$@" || outcome=$?
   $post
@@ -851,6 +983,17 @@ _tabcat_setup() {
   # Remember who owned Tab before us so the fallback can hand the key back.
   # Re-sourcing .zshrc would otherwise capture tabcat-tab itself and turn the
   # fallback into infinite recursion.
+  local -a shift_tab_binding=(${(z)"$(bindkey "${terminfo[kcbt]:-^[[Z}")"})
+  local shift_previous=${shift_tab_binding[2]:-}
+  if [[ -n $shift_previous && $shift_previous != undefined-key && $shift_previous != tabcat-* ]]; then
+    _TABCAT_ORIG_SHIFT_TAB=$shift_previous
+  fi
+  local -a forward_binding=(${(z)"$(bindkey "${terminfo[kcuf1]:-^[[C}")"})
+  local forward_previous=${forward_binding[2]:-}
+  if [[ -n $forward_previous && $forward_previous != undefined-key && $forward_previous != tabcat-* ]]; then
+    _TABCAT_ORIG_FORWARD=$forward_previous
+  fi
+
   local -a tab_binding=(${(z)"$(bindkey '^I')"})
   local previous=${tab_binding[2]:-}
   if [[ ${#tab_binding} -ge 2 && $previous != undefined-key && $previous != tabcat-* ]]; then
@@ -909,9 +1052,15 @@ _tabcat_setup() {
     done
   done
 
-  # A fresh prompt must not inherit the previous line's undo stack or ghost.
-  # Wrapped, not overwritten: users and prompt frameworks define this widget.
-  if [[ -n ${widgets[zle-line-init]:-} ]]; then
+  # A fresh prompt must not inherit the previous line's undo stack or ghost, and
+  # a ghost computed for a line some unwrapped widget has since changed must not
+  # stay on screen. add-zle-hook-widget composes regardless of load order; the
+  # wrap is the fallback for zsh without it.
+  autoload -Uz add-zle-hook-widget 2>/dev/null
+  if (( $+functions[add-zle-hook-widget] )); then
+    add-zle-hook-widget zle-line-init _tabcat_reset_line
+    add-zle-hook-widget zle-line-pre-redraw _tabcat_pre_redraw
+  elif [[ -n ${widgets[zle-line-init]:-} ]]; then
     _tabcat_wrap_widget zle-line-init _tabcat_reset_line
   else
     zle -N zle-line-init _tabcat_reset_line
