@@ -5,17 +5,35 @@ terminal is open and one command needs to run: press ⌥Space, an overlay appear
 with a prompt and ghost text from the same engine, and the app you were working in
 stays frontmost.
 
-This is a skeleton. What works: the global hotkey, the overlay, and the prompt with
-live predictions from the daemon.
+This is a skeleton. What works: the global hotkey, the overlay, the directory chip
+row, and the prompt with live predictions from the daemon.
 
 Not built yet:
 
 - **execution** — Enter shows what *would* run; there is no PTY
-- **directory chips** — the top `cwds` entry is used silently instead
 - **`learn`** — a run does not yet feed the model, so the ranking never improves
   from overlay usage
 - **cards and the badge stack** — the shrink-into-the-corner animation exists only
   as a spike
+- **filtering the chip row by typing** — ⌘-digit and the ⌥ cycle cover the fluent
+  path, so this waits until the row is long enough to be worth it
+
+## Keys
+
+| | |
+|---|---|
+| ⌥Space | show the overlay; press again with ⌥ still held to walk the chip row |
+| ⌥→ / ⌥← | walk the chip row while ⌥ is held |
+| release ⌥ | commit the directory, caret is already in the field |
+| ⌘1…⌘9 | jump straight to a chip |
+| Tab or → | accept the ghost |
+| Enter | submit (currently: show what would run) |
+| Escape | clear the line |
+
+The ⌥Space double meaning is deliberate and is why `Controller` tracks whether ⌥
+has been held continuously since the overlay appeared: the hotkey *is* ⌥Space, so
+tapping Space again without releasing ⌥ cannot mean "toggle" — it has to mean "next
+directory", exactly like a window switcher. Release ⌥ and ⌥Space toggles again.
 
 ## Requirements
 
@@ -54,6 +72,13 @@ swift run TabcatGUI --check
 It resolves the socket path, pings, asks for `cwds` and one prediction, and reports
 each step. `bad_op: unknown op: cwds` means the *running daemon* predates the op —
 restart it with `tabcat daemon stop`.
+
+It also reports the cold-start seed even when it would not be used, because that
+path only runs on a fresh install — the one moment nobody is watching a diagnostic.
+That is not paranoia: the first implementation used
+`mdfind "kMDItemFSName == '.git'"` and returned nothing at all, because Spotlight
+does not index hidden entries and therefore cannot see the one marker that
+identifies a repository. It is a pruned `find` now.
 
 ## Signing
 

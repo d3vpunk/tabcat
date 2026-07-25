@@ -10,20 +10,23 @@ enum Typeface {
     static let measuring = NSFont(name: name, size: size)
         ?? .monospacedSystemFont(ofSize: size, weight: .regular)
     static var swiftUI: Font { .custom(name, size: size) }
+    static func small(_ size: CGFloat) -> Font { .custom(name, size: size) }
 }
 
 struct PromptView: View {
     @ObservedObject var model: PromptModel
     @FocusState private var focused: Bool
+    @Namespace private var chipGlass
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            directory
+        VStack(alignment: .leading, spacing: 14) {
+            chips
+            selectedPath
             field
             footer
         }
         .padding(26)
-        .frame(width: 720, alignment: .leading)
+        .frame(width: 760, alignment: .leading)
         // .continuous is not cosmetic: the default .circular reads as a hard
         // corner and does not match the Dock.
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
@@ -31,18 +34,56 @@ struct PromptView: View {
         .onAppear { focused = true }
     }
 
-    private var directory: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "folder")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Text(abbreviated(model.cwd))
-                .font(.custom(Typeface.name, size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.head)
+    // MARK: - Directory chips
+
+    private var chips: some View {
+        // A container so neighbouring chips merge into one segmented surface
+        // instead of reading as loose pills.
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(Array(model.directories.enumerated()), id: \.element.id) { index, directory in
+                    chip(directory, index: index)
+                }
+            }
         }
     }
+
+    private func chip(_ directory: Directory, index: Int) -> some View {
+        let active = index == model.selection
+        return HStack(spacing: 6) {
+            // Guessed directories are marked, or the ordering looks arbitrary and
+            // the user has no way to tell why.
+            if !directory.learned {
+                Image(systemName: "sparkle")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            Text(directory.label)
+                .font(Typeface.small(12))
+                .lineLimit(1)
+            Text("\(index + 1)")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .foregroundStyle(active ? .primary : .secondary)
+        .glassEffect(active ? .regular : .clear, in: Capsule())
+        .glassEffectUnion(id: "chips", namespace: chipGlass)
+    }
+
+    /// The chip label is only the last path component, which is ambiguous between
+    /// two repositories that both have a `src`. Spelling out the selected one costs
+    /// a line and removes the guesswork.
+    private var selectedPath: some View {
+        Text(abbreviated(model.cwd))
+            .font(Typeface.small(11))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.head)
+    }
+
+    // MARK: - Prompt
 
     private var field: some View {
         HStack(spacing: 10) {
@@ -68,7 +109,7 @@ struct PromptView: View {
 
             if !model.handle.isEmpty {
                 Text("⚡\(model.handle)")
-                    .font(.custom(Typeface.name, size: 11))
+                    .font(Typeface.small(11))
                     .foregroundStyle(.secondary)
             }
         }
@@ -82,6 +123,14 @@ struct PromptView: View {
             model.clear()
             return .handled
         }
+        // ⌘1…⌘9 jump straight to a chip. Command rather than Option, because
+        // ⌥-digit produces a character the field would otherwise insert.
+        .onKeyPress(keys: Set((1...9).map { KeyEquivalent(Character(String($0))) })) { press in
+            guard press.modifiers.contains(.command),
+                  let digit = press.characters.first.flatMap({ Int(String($0)) })
+            else { return .ignored }
+            return model.select(digit: digit) ? .handled : .ignored
+        }
     }
 
     private var footer: some View {
@@ -89,7 +138,7 @@ struct PromptView: View {
             if !model.wouldRun.isEmpty {
                 ForEach(model.wouldRun.suffix(3), id: \.self) { line in
                     Text("would run: \(line)")
-                        .font(.custom(Typeface.name, size: 11))
+                        .font(Typeface.small(11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)

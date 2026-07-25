@@ -3,6 +3,9 @@ import SwiftUI
 
 @MainActor
 final class PromptModel: ObservableObject {
+    /// As many chips as there are ⌘-digit shortcuts to reach them.
+    static let directoryLimit = 9
+
     /// Only what the user typed. The ghost is never part of this — that is the
     /// whole reason Enter still means Enter and the caret cannot wander into a
     /// suggestion.
@@ -12,17 +15,20 @@ final class PromptModel: ObservableObject {
     @Published private(set) var ghost = ""
     /// Magic-name handle the daemon offers for this line, or "".
     @Published private(set) var handle = ""
-    /// The directory predictions are asked for. A chip row replaces this later;
-    /// for now it is the top `cwds` entry.
-    @Published private(set) var cwd: String
+    @Published private(set) var directories: [Directory] = []
+    @Published private(set) var selection = 0
     @Published private(set) var status = "connecting…"
     /// Lines Enter was pressed on. Nothing is executed yet — no PTY in this build.
     @Published private(set) var wouldRun: [String] = []
 
     private var client: DaemonClient?
 
-    init() {
-        cwd = FileManager.default.homeDirectoryForCurrentUser.path
+    /// The directory predictions are asked for. Falls back to home so a request is
+    /// never sent with an empty cwd, which the daemon rejects.
+    var cwd: String {
+        directories.indices.contains(selection)
+            ? directories[selection].path
+            : FileManager.default.homeDirectoryForCurrentUser.path
     }
 
     // MARK: - Setup
@@ -34,47 +40,92 @@ final class PromptModel: ObservableObject {
                 path = try DaemonClient.resolveSocketPath()
             } catch {
                 status = describe(error)
+                await seedDirectories(reason: "no daemon")
                 return
             }
             let client = DaemonClient(socketPath: path)
             self.client = client
 
-            // Warms the connection and tells us whether the daemon is even there
-            // before the first keystroke has to wait for it.
+            // Warms the connection, so the first keystroke does not wait for it,
+            // and tells us whether the daemon is there at all.
             do {
                 _ = try await client.request(op: "ping")
             } catch {
                 status = "no daemon at \(path) — start one with `tabcat daemon`"
+                await seedDirectories(reason: "no daemon")
                 return
             }
-            await pickWorkingDirectory(client)
+            await loadDirectories(client)
         }
     }
 
-    /// The top-ranked directory, or the home directory when the daemon has none.
-    /// An empty answer is the honest state of a fresh install: imported shell
-    /// history carries no directory, so nothing has been learned yet.
-    private func pickWorkingDirectory(_ client: DaemonClient) async {
+    private func loadDirectories(_ client: DaemonClient) async {
         do {
-            let entries = try await client.cwds(limit: 1)
-            if let top = entries.first {
-                cwd = top.path
-                status = "ready"
+            let entries = try await client.cwds(limit: Self.directoryLimit)
+            if entries.isEmpty {
+                // Not an error: imported shell history carries no directory, so a
+                // fresh install has genuinely learned none.
+                await seedDirectories(reason: "nothing learned yet")
             } else {
-                status = "ready — no learned directories yet, using ~"
+                directories = entries.map { Directory(path: $0.path, learned: true) }
+                selection = 0
+                status = "ready"
             }
+        } catch let error as DaemonError where error.code == "bad_op" {
+            status = "daemon predates the cwds op — restart it with `tabcat daemon stop`"
+            await seedDirectories(reason: "daemon too old")
         } catch {
-            status = "ready — \(describe(error))"
+            status = describe(error)
+            await seedDirectories(reason: "cwds failed")
         }
+    }
+
+    private func seedDirectories(reason: String) async {
+        let paths = await DirectorySeed.gitRepositories(limit: Self.directoryLimit)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        directories = paths.isEmpty
+            ? [Directory(path: home, learned: false)]
+            : paths.map { Directory(path: $0, learned: false) }
+        selection = 0
+        status = "\(reason) — directories guessed from git repositories on disk"
+    }
+
+    // MARK: - Directory selection
+
+    /// The hold-⌥ cycle. Wraps, like a window switcher.
+    func selectNext() {
+        guard !directories.isEmpty else { return }
+        select((selection + 1) % directories.count)
+    }
+
+    func selectPrevious() {
+        guard !directories.isEmpty else { return }
+        select((selection - 1 + directories.count) % directories.count)
+    }
+
+    /// ⌘1…⌘9. Out-of-range digits are ignored rather than clamped: jumping to a
+    /// different chip than the one pressed would be worse than doing nothing.
+    func select(digit: Int) -> Bool {
+        let index = digit - 1
+        guard directories.indices.contains(index) else { return false }
+        select(index)
+        return true
+    }
+
+    private func select(_ index: Int) {
+        guard index != selection else { return }
+        selection = index
+        // The prediction was for the previous directory, so it is now wrong — the
+        // cwd boost is a big part of the ranking.
+        requestPrediction()
     }
 
     // MARK: - Prediction
 
     private func requestPrediction() {
         let line = typed
-        // Only at the end of the line, and never for an empty one: a ghost behind
-        // a mid-line caret is noise. The skeleton has no mid-line caret yet, but
-        // the rule belongs with the request, not with the view.
+        // Never for an empty line, and only with a client: an empty cwd or line
+        // would be rejected anyway.
         guard !line.isEmpty, let client else {
             ghost = ""
             handle = ""
@@ -87,9 +138,9 @@ final class PromptModel: ObservableObject {
             do {
                 let prediction = try await client.predict(line: line, cursorCodePoints: cursor, cwd: cwd, limit: 1)
                 // The answer describes the line as it was when we asked. If the
-                // user kept typing, showing it would offer text they never saw
-                // suggested for what is now on screen.
-                guard line == typed else { return }
+                // user kept typing or switched directory, showing it would offer
+                // text they never saw suggested for what is now on screen.
+                guard line == typed, cwd == self.cwd else { return }
                 handle = prediction.handleHint
                 ghost = prediction.candidates.first.map {
                     ghostText(for: $0, line: line, cursorCodePoints: cursor)

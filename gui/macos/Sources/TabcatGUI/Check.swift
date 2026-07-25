@@ -84,6 +84,17 @@ enum Check {
             ok = false
         }
 
+        // Always reported, not only when it would be used: this is the cold-start
+        // path, and a broken Spotlight query would otherwise only surface on a
+        // fresh install — the one moment nobody is watching a diagnostic.
+        let seed = await DirectorySeed.gitRepositories(limit: 5)
+        if seed.isEmpty {
+            line(false, "seed: mdfind found no git repositories under ~ — cold start would fall back to ~ alone")
+        } else {
+            line(true, "seed: \(seed.count) repositories, newest first")
+            for path in seed { print("        \(path)") }
+        }
+
         return ok ? 0 : 1
     }
 
