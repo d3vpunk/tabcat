@@ -14,7 +14,9 @@ struct Layout {
     /// because the card below is positioned relative to it: a box that grew with its
     /// content would push the card off its own slot.
     static let launcherSize = CGSize(width: 800, height: 300)
-    static let cardSize = CGSize(width: 760, height: 260)
+    /// Same width as the launcher, derived rather than repeated: the two are stacked
+    /// and any difference reads as a misalignment.
+    static let cardSize = CGSize(width: launcherSize.width, height: 260)
     static let badgeSize = CGSize(width: 300, height: 56)
     static let badgeGap: CGFloat = 10
     /// The rail is sized for this many badges whether they are there or not, so
