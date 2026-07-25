@@ -380,6 +380,38 @@ Beim ersten echten Dogfooding kamen weitere dazu:
 13. **Badge kam zu spät**: nur bei exakter Zeilengleichheit. Jetzt in der Reihenfolge des REPL — getippte Zeile, dann die Zeile die der Top-Kandidat erzeugen würde (`acceptedLineFor`-Parität), dann Prefix-Treffer ab 2 Zeichen. Der Indikator erscheint, sobald das Getippte auf ein benanntes Kommando zuläuft
 14. **Zwei Forks pro Tastendruck**: `$(_tabcat_header_handle)` und `$(_tabcat_ghost_for_candidate)` — Command-Substitution forkt eine Subshell. Beide setzen jetzt `REPLY`
 
+### Verifikations-Lehren
+
+Die Bug-Liste oben hat ein Muster: **jede zsh-Annahme, die ich aus dem Gedächtnis
+geschrieben habe, war falsch. Jede, die ich vorher gemessen habe, hat gehalten.**
+Gemessen und richtig: `zsocket`-Latenz, `${(g::)}`-Decode, die Keymap-Belegung,
+Node-Kaltstart, Predictor-Build. Aus dem Gedächtnis und falsch:
+
+| Annahme | Realität | Einzeiler, der es sofort zeigt |
+|---|---|---|
+| `region_highlight`-Eintrag `P0 <len>` färbt POSTDISPLAY | `P`-Offsets zählen vom Anfang des **ganzen Displays** — `P0 n` färbt die ersten n Zeichen des BUFFERs | Widget setzen, das `BUFFER=abcde POSTDISPLAY=XYZ region_highlight=("P0 3 fg=red")` setzt, Ausgabe im zpty abgreifen |
+| Ein gespeicherter Highlight-Eintrag lässt sich per Value-Match entfernen | zle **verschiebt die Offsets** bestehender Einträge, wenn sich der Puffer ändert | Entry und `region_highlight[1]` pro Tastendruck in eine Datei loggen |
+| `int()` ist eine zsh-Mathfunktion | braucht `zsh/mathfunc`; ohne Modul `unknown function: int` | `zsh -fc 'print $(( int(1.5) ))'` |
+| `zselect -t N` liefert 0 | Exit 1, wenn der Timeout ausläuft — der Normalfall beim Warten | `zsh -fc 'zmodload zsh/zselect; zselect -t 5; print $?'` |
+| `zsystem flock -t 0 $fd` sperrt einen fd | nimmt einen **Dateinamen**, gibt den fd über `-f var` zurück, und **erstellt die Datei nicht** | `zsh -fc 'zmodload zsh/system; zsystem flock -t 0 -f fd /tmp/neu; print $?'` |
+| `${${(z)line}[1]}` ist das erste Wort | indexiert den zusammengefügten String, liefert das erste **Zeichen** | `zsh -fc 'l="git status"; print ${${(z)l}[1]}'` |
+
+Regel für die nächste Runde: zsh-Semantik nicht behaupten, sondern in einem
+Einzeiler zeigen — und der Kommentar im Code nennt das Verhalten erst, wenn es
+gemessen ist.
+
+**Blinder Fleck in den eigenen Tests.** Die Ghost-Tests prüften `POSTDISPLAY`,
+niemals `region_highlight`. Der sichtbarste Fehler des Plugins — die eigene
+Eingabe wurde grau gefärbt — lebte genau in dem Feld, das kein Test ansah, und
+fiel dem User auf, nicht der Suite. In einem Terminal ist das, was der User
+*sieht*, nicht nur der Text: die Highlight-Ranges gehören mitgeprüft.
+
+**Prozess.** Die Review-Subagents hatten Schreibrechte und haben eigenständig
+committet (`c4a3731` Plugin + Tests, `d1cfd85` ein Plan-Dokument). Der erste fiel
+erst auf, als sein Test rot wurde, der zweite durch Zufall. Review-Agents künftig
+lesend, oder nach dem Delegieren `git log`/`git status` prüfen, bevor weiter
+committet wird.
+
 ### Testabdeckung
 
 462 Tests, 31 Dateien. Neu:
