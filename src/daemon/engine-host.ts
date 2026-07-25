@@ -273,8 +273,11 @@ export class EngineHost {
         })) {
           this.offset = opened.size;
         } else {
-          // Unreadable: stay at offset 0 with an unknown inode so the next
-          // request tries again instead of skipping the file forever.
+          // A half-read history would silently skew every ranking. Drop what was
+          // parsed, warn, and leave the inode unknown so the next request
+          // retries instead of serving an incomplete model.
+          this.options.onWarn?.(`history could only be read partially (${this.options.historyFile})`);
+          entries.length = 0;
           this.ino = -1;
         }
       } catch {

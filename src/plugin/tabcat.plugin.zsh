@@ -100,6 +100,15 @@ typeset -gi _TABCAT_GHOST_CURSOR=-1
 # The exact region_highlight entry we appended, so it can be removed again.
 typeset -g _TABCAT_HL_ENTRY=''
 typeset -gi _TABCAT_HL_INDEX=0
+# zsh 5.9 added a memo field to region_highlight entries so plugins can tell
+# their own apart. zsh-syntax-highlighting rebuilds the array on every keystroke
+# and keeps foreign entries only when they carry one; without it our ghost would
+# lose its dim styling and render exactly like typed text. Older zsh would treat
+# the suffix as part of the style spec, so it is only added when supported.
+typeset -g _TABCAT_HL_MEMO=''
+if [[ ${ZSH_VERSION%%.*} -gt 5 || ( ${ZSH_VERSION%%.*} -eq 5 && ${${ZSH_VERSION#*.}%%.*} -ge 9 ) ]]; then
+  _TABCAT_HL_MEMO=',memo=tabcat'
+fi
 typeset -g _TABCAT_PENDING_LINE=''
 typeset -g _TABCAT_PENDING_CWD=''
 typeset -ga _TABCAT_ROWS=()
@@ -414,12 +423,19 @@ _tabcat_header_handle() {
 # into that slot is left alone.
 _tabcat_clear_highlight() {
   if (( ${#region_highlight} )); then
-    if [[ -n $_TABCAT_HL_ENTRY ]]; then
-      region_highlight=("${(@)region_highlight:#$_TABCAT_HL_ENTRY}")
-    fi
-    if (( _TABCAT_HL_INDEX > 0 && _TABCAT_HL_INDEX <= ${#region_highlight} )); then
-      [[ ${region_highlight[_TABCAT_HL_INDEX]} == *" ${TABCAT_GHOST_STYLE}" ]] &&
-        region_highlight[_TABCAT_HL_INDEX]=()
+    if [[ -n $_TABCAT_HL_MEMO ]]; then
+      # The memo is the only stable handle on our own entry: zle shifts the
+      # offsets as the buffer changes AND rewrites the style field when storing
+      # it (`fg=8,memo=tabcat` comes back as `fg=8 memo=tabcat`), so matching the
+      # string we wrote fails on both counts.
+      region_highlight=("${(@)region_highlight:#*memo=tabcat*}")
+    else
+      # zsh < 5.9 has no memo field. Fall back to the remembered position,
+      # guarded by our style so a foreign entry that moved into that slot stays.
+      if (( _TABCAT_HL_INDEX > 0 && _TABCAT_HL_INDEX <= ${#region_highlight} )); then
+        [[ ${region_highlight[_TABCAT_HL_INDEX]} == *${TABCAT_GHOST_STYLE}* ]] &&
+          region_highlight[_TABCAT_HL_INDEX]=()
+      fi
     fi
   fi
   _TABCAT_HL_ENTRY=''
@@ -517,7 +533,7 @@ _tabcat_ghost() {
     # greys the first n characters of what the user typed and leaves the
     # suggestion in the normal colour, which reads exactly like the ghost and
     # the typed text having been mixed up.
-    _TABCAT_HL_ENTRY="${#BUFFER} $(( ${#BUFFER} + ${#POSTDISPLAY} )) ${TABCAT_GHOST_STYLE}"
+    _TABCAT_HL_ENTRY="${#BUFFER} $(( ${#BUFFER} + ${#POSTDISPLAY} )) ${TABCAT_GHOST_STYLE}${_TABCAT_HL_MEMO}"
     region_highlight+=("$_TABCAT_HL_ENTRY")
     _TABCAT_HL_INDEX=${#region_highlight}
   fi
@@ -560,8 +576,19 @@ _tabcat_lone_word() {
 _tabcat_pre_redraw() {
   (( _TABCAT_OFF )) && return 0
   [[ -z $POSTDISPLAY ]] && return 0
-  _tabcat_ghost_is_fresh && return 0
-  _tabcat_clear_ghost
+  if ! _tabcat_ghost_is_fresh; then
+    _tabcat_clear_ghost
+    return 0
+  fi
+  # zsh-syntax-highlighting and friends rebuild region_highlight wholesale on
+  # every keystroke. If our entry disappeared while the ghost is still on
+  # screen, re-add it — otherwise the suggestion renders exactly like typed text,
+  # which is the failure mode this styling exists to prevent.
+  if [[ -n $_TABCAT_HL_MEMO && -n $_TABCAT_HL_ENTRY ]] &&
+     [[ ${region_highlight[(r)*memo=tabcat*]} != *memo=tabcat* ]]; then
+    region_highlight+=("$_TABCAT_HL_ENTRY")
+    _TABCAT_HL_INDEX=${#region_highlight}
+  fi
   return 0
 }
 

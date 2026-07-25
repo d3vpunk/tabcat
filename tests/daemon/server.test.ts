@@ -413,6 +413,27 @@ describe('daemon: protocol errors and limits', () => {
     client.close();
   });
 
+  it('rejects an oversized fragment that follows a newline in the same chunk', async () => {
+    // The guard measured the whole buffer, so any earlier newline in the same
+    // chunk let an unbounded fragment through.
+    await daemon({ maxLineBytes: 256 });
+    const client = await TestClient.connect(socketPath);
+    // Both readers queued before the write: the daemon answers the complete
+    // request first and complains about the leftover fragment second.
+    const answered = client.writeRaw(`ping\tz1\t1\n${'x'.repeat(400)}`);
+    const complaint = client.writeRaw('');
+    expect((await withTimeout(answered, 2_000, 'no answer to the complete request'))[0]?.slice(0, 2)).toEqual([
+      'ok',
+      'z1',
+    ]);
+    expect((await withTimeout(complaint, 2_000, 'no answer to the oversized fragment'))[0]?.slice(0, 3)).toEqual([
+      'err',
+      '-',
+      'too_long',
+    ]);
+    client.close();
+  });
+
   it('turns away connections above the cap with a reply, not a silent RST', async () => {
     await daemon({ maxConnections: 1 });
     const first = await TestClient.connect(socketPath);

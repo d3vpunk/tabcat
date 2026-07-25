@@ -330,7 +330,9 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
     // Buffer-relative offsets, NOT `P0 n`: with the P prefix the offsets count
     // from the start of the whole display, so `P0 n` dims the first n characters
     // of what the user typed and leaves the suggestion in normal colour.
-    expect(later).toMatch(/^hl=1 items=\(\d+ \d+ fg=8\)$/);
+    // zsh stores the memo with a space, not the comma it was written with —
+    // which is why the cleanup keys on the memo instead of the whole string.
+    expect(later).toMatch(/^hl=1 items=\(\d+ \d+ fg=8( memo=tabcat)?\)$/);
     // Ghost gone -> its highlight gone, and nobody else's entries were touched.
     expect(cleared).toBe('hl=0 items=()');
   });
@@ -349,7 +351,7 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
     `,
       { term: 'xterm' },
     );
-    expect(probe()[0]).toMatch(/^hl=1 items=\(\d+ \d+ underline\)$/);
+    expect(probe()[0]).toMatch(/^hl=1 items=\(\d+ \d+ underline( memo=tabcat)?\)$/);
   });
 
   it('expands a magic name typed with surrounding whitespace', async () => {

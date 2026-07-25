@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Server, Socket, createServer } from 'node:net';
 import { FsLike } from '../engine/fs-completer.js';
@@ -6,7 +6,7 @@ import { RankedCandidate } from '../engine/predictor.js';
 import { VERSION } from '../version.js';
 import { EngineHost } from './engine-host.js';
 import { pingDaemon } from './client.js';
-import { ensureSocketDir, pidfileFor } from './paths.js';
+import { SocketPathError, ensureSocketDir, pidfileFor } from './paths.js';
 import { DaemonRequest, PROTOCOL_VERSION, codePointLength, encodeMessage, err, ok, parseRequest } from './protocol.js';
 
 /** Long enough to survive a lunch break, short enough not to squat on ~170 MB RSS forever. */
@@ -126,12 +126,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     let buffer = '';
     socket.on('data', (chunk) => {
       buffer += chunk.toString('utf8');
-      // Compared in characters, not bytes: byte-exact counting would be O(n)
-      // per chunk and the point here is only to bound a broken client.
-      if (buffer.length > maxLineBytes && !buffer.includes('\n')) {
-        socket.end(err('-', 'too_long', `request exceeds ${maxLineBytes} characters`));
-        return;
-      }
       let newline = buffer.indexOf('\n');
       while (newline >= 0) {
         const line = buffer.slice(0, newline);
@@ -157,6 +151,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         }
         newline = buffer.indexOf('\n');
       }
+      // Complete requests are answered first, then what is left over is judged:
+      // the guard has to measure the UNTERMINATED tail, and an earlier newline
+      // in the same chunk must not let an unbounded fragment through.
+      // Characters, not bytes — byte-exact counting would be O(n) per chunk and
+      // the point is only to bound a broken client.
+      if (buffer.length > maxLineBytes) {
+        socket.end(err('-', 'too_long', `request exceeds ${maxLineBytes} characters`));
+      }
     });
   });
 
@@ -166,6 +168,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // the machine from talking to this daemon (and reading the command lines).
     chmodSync(socketPath, 0o600);
     socketIno = inoOf(socketPath);
+    // The directory was validated BEFORE the bind; re-check afterwards so a
+    // directory swapped in between cannot leave us serving from a path someone
+    // else controls.
+    verifySocket(socketPath);
     writePidfile(pidfile);
   } catch (error) {
     // Never leave a listening server behind on a half-finished start.
@@ -377,6 +383,20 @@ function writePidfile(pidfile: string): void {
   } catch {
     // Informational only — the socket, not the pidfile, is the source of truth.
   }
+}
+
+/**
+ * The socket we just bound must be a socket, ours, and in a directory that is
+ * still ours and still private. Checking only before bind leaves a window.
+ */
+function verifySocket(socketPath: string): void {
+  const stats = lstatSync(socketPath);
+  if (!stats.isSocket()) throw new SocketPathError(`not a socket after bind: ${socketPath}`);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
+  if (uid >= 0 && stats.uid !== uid) throw new SocketPathError(`socket belongs to uid ${stats.uid}: ${socketPath}`);
+  const dir = lstatSync(dirname(socketPath));
+  if (uid >= 0 && dir.uid !== uid) throw new SocketPathError(`socket directory belongs to uid ${dir.uid}`);
+  if ((dir.mode & 0o077) !== 0) throw new SocketPathError(`socket directory is not private: ${dirname(socketPath)}`);
 }
 
 const idOf = (line: string): string => {
