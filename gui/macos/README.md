@@ -55,6 +55,12 @@ visual language is Liquid Glass (`glassEffect`), which does not exist earlier.
 
 A `tabcat` on `$PATH` new enough to answer `daemon path` and the `cwds` op.
 
+The overlay starts a daemon itself when none is listening, the way the zsh plugin
+does. That is not a nicety: the daemon exits after 45 minutes idle and this front
+end only talks on a keystroke, so coming back to a dead socket is the normal case.
+Recovering by asking you to open a terminal would defeat the one situation the
+overlay exists for.
+
 ## Build and run
 
 ```sh

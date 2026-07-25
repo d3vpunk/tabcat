@@ -63,6 +63,24 @@ final class PromptModel: ObservableObject {
         }
     }
 
+    /// Called every time the overlay appears. After hours away the daemon has long
+    /// since idled out, and the chip row would otherwise still show whatever it held
+    /// before — or the seeded fallback from a failed start. The client respawns a
+    /// daemon on its own, so this both heals the connection and refreshes what is on
+    /// screen before the first keystroke rather than after it.
+    func refresh() {
+        guard let client else { return }
+        Task {
+            do {
+                _ = try await client.request(op: "ping")
+            } catch {
+                status = describe(error)
+                return
+            }
+            await loadDirectories(client)
+        }
+    }
+
     private func loadDirectories(_ client: DaemonClient) async {
         do {
             let entries = try await client.cwds(limit: Self.directoryLimit)
@@ -149,6 +167,9 @@ final class PromptModel: ObservableObject {
                 ghost = prediction.candidates.first.map {
                     ghostText(for: $0, line: line, cursorCodePoints: cursor)
                 } ?? ""
+                // A previous failure would otherwise stay on screen forever, since
+                // nothing else ever clears it.
+                if status != "ready" { status = "ready" }
             } catch let error as DaemonError where error.isWarming {
                 // Normal right after a cold start; the next keystroke tries again.
                 guard line == typed else { return }

@@ -62,6 +62,10 @@ final class Controller {
         // makeKeyAndOrderFront on a nonactivating panel takes the keyboard without
         // making this the active application.
         panel.makeKeyAndOrderFront(nil)
+        // The overlay can sit unused for hours, by which time the daemon has idled
+        // out. Healing here means the first keystroke after a break already has
+        // predictions, instead of being the thing that discovers the problem.
+        model.refresh()
         // The hotkey is a chord, so ⌥ is down right now — unless the user got here
         // some other way, in which case there is nothing to cycle.
         cycling = NSEvent.modifierFlags.contains(.option)

@@ -14,14 +14,19 @@ actor DaemonClient {
     private var buffer = Data()
     private let socketPath: String
     private let timeout: TimeInterval
+    private let binary: String
+    /// Rate limit for respawning, so a `tabcat` that cannot start does not turn
+    /// every keystroke into a process launch.
+    private var lastSpawn: Date?
 
     /// Set once the daemon reports a protocol we cannot speak. Latching is
     /// deliberate: retrying would produce the same answer every keystroke.
     private(set) var disabledReason: String?
 
-    init(socketPath: String, timeout: TimeInterval = 0.15) {
+    init(socketPath: String, timeout: TimeInterval = 0.15, binary: String = "tabcat") {
         self.socketPath = socketPath
         self.timeout = timeout
+        self.binary = binary
     }
 
     /// Asks the CLI where the socket is instead of reimplementing the rule. It
@@ -56,7 +61,20 @@ actor DaemonClient {
     /// Returns the response rows: row 0 is the header, the rest are payload.
     func request(op: String, fields: [String] = []) async throws -> [[String]] {
         if let reason = disabledReason { throw DaemonError(code: "disabled", message: reason) }
-        try connectIfNeeded()
+        do {
+            try connectIfNeeded()
+        } catch {
+            // The daemon exits after 45 minutes idle, and this front end only talks
+            // on a keystroke — so coming back to a dead socket is the normal case,
+            // not an edge one. Recovering by asking the user to open a terminal
+            // would defeat the one situation the overlay exists for.
+            //
+            // Retried only here, before anything was sent. A failure mid-request
+            // must NOT be retried: re-sending a `learn` would append the same
+            // command to the history twice.
+            guard await startDaemon() else { throw error }
+            try connectIfNeeded()
+        }
 
         sequence += 1
         let id = "g\(sequence)"
@@ -86,6 +104,40 @@ actor DaemonClient {
             if !(error is DaemonError) { dropConnection() }
             throw error
         }
+    }
+
+    // MARK: - Respawning
+
+    /// Starts a daemon on our socket and waits for it to listen.
+    ///
+    /// No spawn lock on our side: the CLI already treats "someone else got there
+    /// first" as success — EADDRINUSE and AlreadyRunningError both exit 0, because
+    /// the desired end state holds either way. The zsh plugin races several shells
+    /// into the same path on purpose.
+    ///
+    /// - Returns: whether a socket is reachable afterwards.
+    private func startDaemon() async -> Bool {
+        // A cold daemon needs ~0.3 s to listen; anything sooner than that between
+        // attempts is just launching processes.
+        if let lastSpawn, Date().timeIntervalSince(lastSpawn) < 5 { return false }
+        lastSpawn = Date()
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [binary, "daemon", "--socket", socketPath]
+        // The daemon has to outlive this app, and its output must not land in ours.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return false }
+
+        // Poll rather than sleep once: usually ready well before the ceiling, and
+        // the first keystroke after a break should not wait longer than it must.
+        for _ in 0..<30 {
+            try? await Task.sleep(for: .milliseconds(100))
+            if (try? connectIfNeeded()) != nil { return true }
+        }
+        return false
     }
 
     // MARK: - Connection
