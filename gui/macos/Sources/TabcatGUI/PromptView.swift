@@ -50,17 +50,15 @@ struct PromptView: View {
 
     private func chip(_ directory: Directory, index: Int) -> some View {
         let active = index == model.selection
-        return HStack(spacing: 6) {
-            // Guessed directories are marked, or the ordering looks arbitrary and
-            // the user has no way to tell why.
-            if !directory.learned {
-                Image(systemName: "sparkle")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
-            }
-            Text(directory.label)
+        // No per-chip marker for guessed directories: the status line already says
+        // the whole row was guessed, and an icon on every chip only ate the space
+        // the label needs.
+        return HStack(spacing: 7) {
+            Text(directory.label())
                 .font(Typeface.small(12))
-                .lineLimit(1)
+                .fixedSize()
+            // Kept even though it costs width: it is the only thing that makes the
+            // ⌘-digit shortcut discoverable.
             Text("\(index + 1)")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)

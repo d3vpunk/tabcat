@@ -9,12 +9,18 @@ struct Directory: Identifiable, Equatable {
 
     var id: String { path }
 
-    /// Last path component — short enough for a chip. Ambiguous on its own
-    /// (`a/src` vs `b/src`), which is why the full path of the selected chip is
-    /// spelled out underneath the row.
-    var label: String {
+    /// Last path component, capped. Ambiguous on its own (`a/src` vs `b/src`),
+    /// which is why the full path of the selected chip is spelled out underneath
+    /// the row.
+    ///
+    /// The cap is here rather than left to `lineLimit(1)`: a row of chips shares one
+    /// width, so letting SwiftUI compress them squeezes EVERY label down to the
+    /// longest one's leftovers — three characters, in practice. A bounded label
+    /// gives a bounded chip, and the row fits by construction.
+    func label(max characters: Int = 12) -> String {
         let name = (path as NSString).lastPathComponent
-        return name.isEmpty ? path : name
+        let base = name.isEmpty ? path : name
+        return base.count <= characters ? base : String(base.prefix(characters - 1)) + "…"
     }
 }
 

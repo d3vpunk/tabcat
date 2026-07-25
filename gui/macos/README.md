@@ -25,7 +25,7 @@ Not built yet:
 | ⌥Space | show the overlay; press again with ⌥ still held to walk the chip row |
 | ⌥→ / ⌥← | walk the chip row while ⌥ is held |
 | release ⌥ | commit the directory, caret is already in the field |
-| ⌘1…⌘9 | jump straight to a chip |
+| ⌘1…⌘5 | jump straight to a chip |
 | Tab or → | accept the ghost |
 | Enter | submit (currently: show what would run) |
 | Escape | clear the line |

@@ -3,8 +3,11 @@ import SwiftUI
 
 @MainActor
 final class PromptModel: ObservableObject {
-    /// As many chips as there are ⌘-digit shortcuts to reach them.
-    static let directoryLimit = 9
+    /// Five, not nine. The row shares one width: nine chips left about 25 pt per
+    /// label, which truncates every one of them to three characters. Frecency
+    /// ranking means the first chip is usually right anyway, so the tail cost
+    /// readability for entries nobody was going to pick.
+    static let directoryLimit = 5
 
     /// Only what the user typed. The ghost is never part of this — that is the
     /// whole reason Enter still means Enter and the caret cannot wander into a
