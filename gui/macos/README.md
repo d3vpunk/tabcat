@@ -22,9 +22,10 @@ Not built yet:
   deliberate: routing the prompt field into the pty would put a password on screen
   in plain text, and a masked field needs to know when the child is asking for a
   secret, which cannot be detected reliably.
-- **full terminal emulation.** Newlines, carriage returns and escape stripping are
-  handled, which covers `git`, `npm`, `docker` and friends. Cursor addressing is
-  not, so a full-screen program (`vim`, `git rebase -i`) renders wrong.
+- **full terminal emulation.** Newlines, carriage returns, colour stripping and the
+  cursor moves a progress bar redraws itself with are handled, which covers `git`,
+  `npm`, `composer`, `phpstan` and friends. Absolute cursor positioning and scroll
+  regions are not, so a full-screen program (`vim`, `git rebase -i`) renders wrong.
 - **filtering the chip row by typing** — ⌘-digit and the ⌥ cycle cover the fluent
   path, so this waits until the row is long enough to be worth it.
 

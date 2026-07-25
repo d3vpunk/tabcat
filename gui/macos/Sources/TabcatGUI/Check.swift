@@ -103,8 +103,43 @@ enum Check {
         if !ptyOK { ok = false }
 
         if !hazards() { ok = false }
+        if !outputBuffer() { ok = false }
 
         return ok ? 0 : 1
+    }
+
+    /// The output buffer, as a table.
+    ///
+    /// Added after a progress bar arrived as a dozen bars side by side: Symfony
+    /// Console redraws with cursor moves rather than a carriage return, and those were
+    /// being dropped as if they were colour codes. A screenshot was the only thing
+    /// that noticed, which is not a way to find out.
+    private static func outputBuffer() -> Bool {
+        let escape = "\u{1B}"
+        let cases: [(name: String, input: String, expected: String)] = [
+            ("plain lines", "one\ntwo\n", "one\ntwo"),
+            ("carriage return rewrites", "50%\r100%", "100%"),
+            ("colours stripped", "\(escape)[32mgreen\(escape)[0m", "green"),
+            // The shape Symfony's ProgressBar emits: up, to column 1, erase, redraw.
+            ("progress bar redraw", "0%\n\(escape)[1A\(escape)[1G\(escape)[2K50%\n", "50%"),
+            ("erase in line alone", "stale\(escape)[2Kfresh", "fresh"),
+            ("clear screen", "gone\n\(escape)[2Jhere", "here"),
+            ("backspace", "abcx\u{08}", "abc"),
+            ("osc title ignored", "\(escape)]0;a title\u{07}body", "body"),
+        ]
+
+        var wrong: [String] = []
+        for probe in cases {
+            var buffer = OutputBuffer()
+            buffer.append(probe.input)
+            buffer.finish()
+            if buffer.text != probe.expected {
+                wrong.append("\(probe.name): got \(buffer.text.debugDescription), want \(probe.expected.debugDescription)")
+            }
+        }
+        line(wrong.isEmpty, "output buffer: \(cases.count - wrong.count)/\(cases.count) as expected")
+        for problem in wrong { print("        \(problem)") }
+        return wrong.isEmpty
     }
 
     /// The hazard heuristic, as a table.
