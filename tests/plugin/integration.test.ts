@@ -183,7 +183,9 @@ describe.skipIf(!zsh)('plugin against a live daemon', () => {
       _tabcat_request names create $cwd dep $line || { print "CREATE FAILED"; return 1 }
       BUFFER="docker compose up -d" CURSOR=20
       _tabcat_predict 1 || { print "PREDICT FAILED"; return 1 }
-      print -r -- "handle=$(_tabcat_header_handle)"
+      local REPLY
+      _tabcat_header_handle
+      print -r -- "handle=$REPLY"
     `);
     expect(stdout).toContain('handle=dep');
   });

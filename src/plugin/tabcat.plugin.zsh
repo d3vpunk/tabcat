@@ -347,11 +347,10 @@ _tabcat_candidate() {
   _TABCAT_C_REPLACE=${fields[5]:-0}
 }
 
+# Sets REPLY — see _tabcat_ghost_for_candidate: no forks on the keystroke path.
 _tabcat_header_handle() {
   local -a header=("${(@ps:\t:)_TABCAT_ROWS[1]}")
-  local REPLY
   _tabcat_dec ${header[4]:-}
-  print -r -- $REPLY
 }
 
 # ---------------------------------------------------------------------------
@@ -361,6 +360,26 @@ _tabcat_header_handle() {
 _tabcat_clear_ghost() {
   POSTDISPLAY=''
   _TABCAT_GHOST_TEXT=''
+}
+
+# POSTDISPLAY can only append — it cannot rewrite characters already on screen.
+# So a candidate whose `display` corrects what was typed ("doc" -> "Documents/")
+# gets NO ghost: appending its remainder would show "docuMents"-style nonsense
+# that differs from what Tab actually inserts. Tab and the menu still offer it.
+# Sets REPLY instead of printing: this runs on every keystroke, and a command
+# substitution would fork a subshell each time.
+_tabcat_ghost_for_candidate() {
+  local display=$_TABCAT_C_DISPLAY
+  local replace=$_TABCAT_C_REPLACE
+  REPLY=''
+  if (( replace <= 0 )); then
+    REPLY=$display
+    return 0
+  fi
+  local typed=${BUFFER[$(( CURSOR - replace + 1 )),$CURSOR]}
+  # Quoted RHS: the typed text may contain glob characters.
+  [[ "${display[1,${#typed}]}" == "$typed" ]] && REPLY=${display[$(( ${#typed} + 1 )),-1]}
+  return 0
 }
 
 _tabcat_ghost() {
@@ -373,15 +392,16 @@ _tabcat_ghost() {
 
   _tabcat_predict 1 || return 0
 
-  local ghost='' badge=''
+  local ghost='' badge='' REPLY
   if (( ${#_TABCAT_ROWS} > 1 )); then
     local _TABCAT_C_INSERT _TABCAT_C_DISPLAY _TABCAT_C_SOURCE _TABCAT_C_NAME _TABCAT_C_REPLACE
     _tabcat_candidate 2
-    ghost=$_TABCAT_C_INSERT
+    _tabcat_ghost_for_candidate
+    ghost=$REPLY
   fi
   if (( TABCAT_BADGE )); then
-    local handle=$(_tabcat_header_handle)
-    [[ -n $handle ]] && badge=" ⚡${handle}"
+    _tabcat_header_handle
+    [[ -n $REPLY ]] && badge=" ⚡${REPLY}"
   fi
 
   _TABCAT_GHOST_TEXT=$ghost

@@ -253,6 +253,42 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
     expect(probe()[0]).toContain('post=[ ⚡dep]');
   });
 
+  it('shows the badge while the named command is still being typed', async () => {
+    // The DX complaint this fixes: the indicator used to appear only once the
+    // whole command was on the line.
+    writeHistory(entry('echo badge-early', 1_700_000_000_000), entry('echo badge-early', 1_700_000_000_001));
+    await startRealDaemon();
+    expect(daemon?.host.namesCreate('bad', 'echo badge-early', dir)).toEqual({ created: true });
+    await runPty(`
+      pty_start || exit 1
+      type_keys 'echo ba'
+      press_probe
+      zpty -d tc
+    `);
+    // Ghost and badge together: 'dge-early' completes the line, ⚡bad names it.
+    expect(probe()[0]).toBe('buf=[echo ba] cur=7 post=[dge-early ⚡bad] off=0');
+  });
+
+  it('shows no ghost when the suggestion would correct what was typed', async () => {
+    // POSTDISPLAY can only append. A candidate like 'Documents/' after typing
+    // 'doc' would render as 'documents/' — text that differs from what Tab
+    // inserts. The badge and Tab still work, the misleading ghost does not show.
+    writeHistory(entry('cd Documents/', 1_700_000_000_000), entry('cd Documents/', 1_700_000_000_001));
+    await startRealDaemon();
+    await runPty(`
+      pty_start || exit 1
+      type_keys 'cd doc'
+      press_probe
+      type_keys $'\t'
+      press_probe
+      zpty -d tc
+    `);
+    const [typed, afterTab] = probe();
+    expect(typed).toBe('buf=[cd doc] cur=6 post=[] off=0');
+    // Tab still accepts the corrected spelling.
+    expect(afterTab).toBe('buf=[cd Documents/] cur=13 post=[] off=0');
+  });
+
   it('learns an executed command through the precmd hook', async () => {
     await startRealDaemon();
     await runPty(

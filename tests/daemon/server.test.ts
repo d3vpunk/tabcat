@@ -251,6 +251,34 @@ describe('daemon: names', () => {
     client.close();
   });
 
+  it('badges a handle while the command is still being typed', async () => {
+    // Point of the header handle: the indicator has to arrive early, not after
+    // the last chunk was completed.
+    writeHistory(entry('docker compose up -d'), entry('docker compose up -d'));
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+    await client.request('names', 'create', CWD, 'dep', 'docker compose up -d');
+    const early = await client.request('predict', '3', '10', CWD, 'docker com');
+    expect(early[0]?.[3]).toBe('dep');
+    const exact = await client.request('predict', '3', '20', CWD, 'docker compose up -d');
+    expect(exact[0]?.[3]).toBe('dep');
+    const unrelated = await client.request('predict', '3', '4', CWD, 'git ');
+    expect(unrelated[0]?.[3]).toBe('');
+    client.close();
+  });
+
+  it('badges the line the top candidate would produce', async () => {
+    // Parity with the REPL, which badges via acceptedLineFor: the suggestion
+    // completes to a named command even though the typed text does not prefix it.
+    writeHistory(entry('deploy staging now'), entry('deploy staging now'));
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+    await client.request('names', 'create', CWD, 'dsn', 'deploy staging now');
+    const rows = await client.request('predict', '3', '7', CWD, 'deploy ');
+    expect(rows[0]?.[3]).toBe('dsn');
+    client.close();
+  });
+
   it('surfaces a created handle as a magic candidate', async () => {
     await daemon();
     const client = await TestClient.connect(socketPath);

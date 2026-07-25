@@ -104,6 +104,21 @@ export class NameIndex {
     return name !== undefined && cwdMatches(name, cwd) ? name.name : null;
   }
 
+  /**
+   * Handle of a named command the typed text is on its way to — a prefix match,
+   * so the plugin badge can appear while typing instead of only once the line is
+   * complete. Closest completion first (shortest command), newest wins ties.
+   * `minLength` keeps a single character from matching half the index.
+   */
+  handleForPrefix(typed: string, cwd: string, minLength = 2): string | null {
+    const text = typed.trimStart();
+    if (text.trim().length < minLength) return null;
+    const hits = [...this.byLine.values()]
+      .filter((name) => name.line.startsWith(text) && cwdMatches(name, cwd))
+      .sort((a, b) => a.line.length - b.line.length || b.ts - a.ts);
+    return hits[0]?.name ?? null;
+  }
+
   /** Handles in use (collision guard). With `cwd`, only handles active there —
    *  the same handle in an unrelated directory never surfaces, so it is no
    *  collision. */

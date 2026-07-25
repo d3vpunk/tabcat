@@ -210,9 +210,12 @@ function handleLine(line: string, host: EngineHost, options: DaemonOptions): Lin
       try {
         const prediction = host.predict({ line: request.line, cursor: request.cursor, cwd: request.cwd });
         const limit = request.limit === 0 ? prediction.candidates.length : request.limit;
-        // Header carries the exact-line handle so the badge costs no roundtrip.
+        // Header carries the badge handle so it costs no extra roundtrip.
+        const top = prediction.candidates[0];
+        const accepted =
+          top === undefined ? undefined : acceptedLine(request.line, request.cursor, top, prediction.prefix.length);
         const rows: string[][] = [
-          ['ok', request.id, prediction.prefix, host.handleFor(request.line, request.cwd)],
+          ['ok', request.id, prediction.prefix, host.handleHint(request.line, request.cwd, accepted)],
         ];
         for (const candidate of prediction.candidates.slice(0, limit)) {
           rows.push(candidateRow(candidate, prediction.prefix));
@@ -266,6 +269,13 @@ function handleLine(line: string, host: EngineHost, options: DaemonOptions): Lin
       return { response: ok(request.id, host.namesDelete(request.line) ? 'deleted' : 'absent') };
     }
   }
+}
+
+/** How the line would read after accepting `candidate` — same rule the REPL
+ *  applies in `acceptedLineFor`, so both front ends badge the same commands. */
+function acceptedLine(line: string, cursor: number, candidate: RankedCandidate, prefixLength: number): string {
+  const replaceFrom = cursor - (candidate.replacePrefixLength ?? prefixLength);
+  return line.slice(0, Math.max(0, replaceFrom)) + candidate.display + line.slice(cursor);
 }
 
 /**

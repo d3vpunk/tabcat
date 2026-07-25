@@ -155,6 +155,7 @@ prefix keep working:
 | Key | Action |
 |---|---|
 | `Tab` | Accept the top candidate. No candidates → your previous Tab binding (compsys, fzf-tab) handles the key |
+| — | Ghost text is suppressed when a suggestion would *correct* what you typed (`doc` → `Documents/`): the terminal can only append after the cursor, so showing the remainder would read `documents/` — different from what Tab inserts. Tab and `^Xv` still offer it |
 | `→` | Accept one chunk (only at the end of the line) |
 | `Shift+Tab` | Undo the last accept |
 | `Enter` | Expand an exact magic-name handle, then run it |
@@ -168,7 +169,7 @@ prefix keep working:
 | Variable | Default | Effect |
 |---|---|---|
 | `TABCAT_GHOST` | `1` | Ghost text on/off |
-| `TABCAT_BADGE` | `1` | ⚡ handle badge on/off |
+| `TABCAT_BADGE` | `1` | ⚡ handle badge on/off — appears as soon as what you type leads to a named command, not only once the line is complete |
 | `TABCAT_GHOST_STYLE` | `fg=8` | Highlight of the ghost text |
 | `TABCAT_KEY_LABEL` / `_FORGET` / `_QUERY` / `_MENU` | `^Xl` / `^Xf` / `^Xq` / `^Xv` | Rebind the chords |
 | `TABCAT_TIMEOUT` | `0.05` | Seconds the shell waits for the daemon before falling back |

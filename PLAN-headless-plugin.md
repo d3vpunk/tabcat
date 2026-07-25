@@ -372,10 +372,13 @@ Alle in der Implementierung, nicht in den Tests:
 8. **`zsystem flock` erstellt die Lock-Datei nicht** — auf einer frischen Maschine scheiterte damit der allererste Spawn
 9. **Der gespawnte Daemon starb am SIGHUP der Shell, die ihn startete** — er kann während des Node-Starts noch keinen Handler installieren. Jetzt `nohup … &!`
 
-Beim ersten echten Dogfooding kamen zwei weitere dazu:
+Beim ersten echten Dogfooding kamen weitere dazu:
 
 10. **`^Xd` war nie frei** (`_list_expansions` aus compinit) — in der Frei-Liste stand `d` nicht, ich hatte es beim Vorschlag trotzdem genommen. Menü liegt jetzt auf `^Xv`
 11. **Zweimal Sourcen der `.zshrc` machte den Tab-Fallback rekursiv**: der zweite Durchlauf merkte sich `tabcat-tab` als „vorheriges" Tab-Widget. Persistenter State wird jetzt ohne Wert deklariert (`typeset -g` statt `typeset -g X=''`), Bindings, die schon uns gehören, gelten als frei — Re-Sourcing ist idempotent und warnt nicht mehr
+12. **Ghost widersprach dem Getippten**: bei einem korrigierenden Kandidaten (`cd doc` → `Documents/`) wurde `insert` (`uments/`) angehängt, auf dem Bildschirm stand `cd documents/` — etwas anderes als Tab einfügt. POSTDISPLAY kann nur anhängen, also wird der Ghost in diesem Fall unterdrückt (Tab und `^Xv` bieten den Kandidaten weiter an)
+13. **Badge kam zu spät**: nur bei exakter Zeilengleichheit. Jetzt in der Reihenfolge des REPL — getippte Zeile, dann die Zeile die der Top-Kandidat erzeugen würde (`acceptedLineFor`-Parität), dann Prefix-Treffer ab 2 Zeichen. Der Indikator erscheint, sobald das Getippte auf ein benanntes Kommando zuläuft
+14. **Zwei Forks pro Tastendruck**: `$(_tabcat_header_handle)` und `$(_tabcat_ghost_for_candidate)` — Command-Substitution forkt eine Subshell. Beide setzen jetzt `REPLY`
 
 ### Testabdeckung
 

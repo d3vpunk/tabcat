@@ -117,9 +117,20 @@ export class EngineHost {
     return this.predictor.predict(input);
   }
 
-  /** Handle of an EXACT line, for the plugin's badge — no extra roundtrip. */
-  handleFor(line: string, cwd: string): string {
-    return this.nameIndex.handleFor(line, cwd) ?? '';
+  /**
+   * Which handle to show as a badge for the line being typed, in the order the
+   * REPL uses: the typed line itself, then the line the top candidate would
+   * produce (`app.tsx` does the same via acceptedLineFor), then a prefix hint so
+   * the indicator appears while typing rather than after the last chunk.
+   */
+  handleHint(line: string, cwd: string, acceptedLine?: string): string {
+    const exact = this.nameIndex.handleFor(line.trim(), cwd);
+    if (exact !== null) return exact;
+    if (acceptedLine !== undefined) {
+      const accepted = this.nameIndex.handleFor(acceptedLine.trim(), cwd);
+      if (accepted !== null) return accepted;
+    }
+    return this.nameIndex.handleForPrefix(line, cwd) ?? '';
   }
 
   /** What a handle expands to in `cwd`, or '' — drives the Enter expansion. */
