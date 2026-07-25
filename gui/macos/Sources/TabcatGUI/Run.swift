@@ -12,6 +12,13 @@ final class Run: ObservableObject, Identifiable {
         }
     }
 
+    /// Where this run is on screen. One run is in front at a time; everything else
+    /// waits in the rail as a badge.
+    enum Presentation: Equatable {
+        case foreground
+        case badge
+    }
+
     let id = UUID()
     /// What actually runs — after handle expansion, not what was typed.
     let command: String
@@ -20,6 +27,7 @@ final class Run: ObservableObject, Identifiable {
 
     @Published private(set) var state: State = .running
     @Published private(set) var output = ""
+    @Published var presentation: Presentation = .foreground
 
     private var buffer = OutputBuffer()
     private let pty = PTYProcess()

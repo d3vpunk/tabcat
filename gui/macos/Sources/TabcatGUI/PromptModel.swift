@@ -21,9 +21,15 @@ final class PromptModel: ObservableObject {
     @Published private(set) var directories: [Directory] = []
     @Published private(set) var selection = 0
     @Published private(set) var status = "connecting…"
-    /// The run in the foreground, if any. One at a time for now; the badge stack
-    /// that keeps several is the next step.
-    @Published private(set) var run: Run?
+    /// Newest first. One is in front, the rest wait in the rail as badges.
+    @Published private(set) var runs: [Run] = []
+    /// Whether the launcher (chips and prompt) is on screen. Badges stay visible
+    /// either way — that is the point of sending a card away.
+    @Published var launcherVisible = true
+    /// The panel's current frame, so the view can convert screen positions into it.
+    /// Owned here rather than passed in, because the hosting view has to see it
+    /// change in the same update as the content that depends on it.
+    @Published var panelFrame: CGRect = .zero
     /// A command held back for confirmation. Waiting rather than running is the
     /// whole point, so this is a state and not a callback.
     @Published private(set) var pending: PendingRun?
@@ -210,12 +216,6 @@ final class PromptModel: ObservableObject {
         }
         let line = typed
         guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        // One at a time until the badge stack exists. Refusing beats silently
-        // replacing a run whose output the user is still reading.
-        if let run, run.state == .running {
-            status = "still running — Escape cancels it"
-            return
-        }
         typed = ""
         ghost = ""
         handle = ""
@@ -251,11 +251,62 @@ final class PromptModel: ObservableObject {
     }
 
     private func start(command: String, cwd: String) {
-        let run = Run(command: command, cwd: cwd)
-        self.run = run
-        run.start { [weak self] code in
-            self?.report(line: command, cwd: cwd, exitCode: code)
+        // Whatever was in front moves to the rail rather than being replaced. The
+        // previous version refused a second command outright, which for a launcher
+        // built around quick one-offs meant waiting out `npm test` doing nothing.
+        for existing in runs where existing.presentation == .foreground {
+            existing.presentation = .badge
         }
+        let run = Run(command: command, cwd: cwd)
+        runs.insert(run, at: 0)
+        // Oldest first out of the rail: the newest run is the one being watched.
+        if runs.count > Layout.railCapacity + 1 {
+            let dropped = runs.removeLast()
+            dropped.terminate()
+        }
+        run.start { [weak self] code in
+            guard let self else { return }
+            self.report(line: command, cwd: cwd, exitCode: code)
+            self.autoDismiss(run, code: code)
+        }
+    }
+
+    /// A clean run gets out of the way by itself; a failure stays, because an error
+    /// nobody saw is the same as no error report at all.
+    private func autoDismiss(_ run: Run, code: Int32) {
+        guard code == 0 else { return }
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            guard runs.contains(where: { $0 === run }) else { return }
+            // Still in front means it is being read; leave it alone.
+            guard run.presentation == .badge else { return }
+            dismiss(run)
+        }
+    }
+
+    // MARK: - Foreground and rail
+
+    var foreground: Run? { runs.first { $0.presentation == .foreground } }
+    var badges: [Run] { runs.filter { $0.presentation == .badge } }
+
+    /// Sends the run in front to the rail. This is the gesture the whole overlay was
+    /// designed around: the output does not matter right now, put it away.
+    func minimizeForeground() {
+        guard let run = foreground else { return }
+        run.presentation = .badge
+    }
+
+    /// Brings a badge back to the front, and the current front to the rail.
+    func bringToFront(_ run: Run) {
+        for other in runs where other !== run {
+            other.presentation = .badge
+        }
+        run.presentation = .foreground
+    }
+
+    func dismiss(_ run: Run) {
+        run.terminate()
+        runs.removeAll { $0 === run }
     }
 
     /// Expands a magic-name handle to the command it stands for. The daemon owns
@@ -292,9 +343,17 @@ final class PromptModel: ObservableObject {
         }
     }
 
-    func dismissRun() {
-        run?.terminate()
-        run = nil
+    /// Escape's last resort: put the front card away, or drop it if it is finished.
+    func dismissForeground() {
+        guard let run = foreground else { return }
+        if run.state == .running {
+            // Still working: park it rather than kill it. Cancelling is what the
+            // badge's own close does, deliberately, so Escape cannot destroy work by
+            // being pressed one time too many.
+            run.presentation = .badge
+        } else {
+            dismiss(run)
+        }
     }
 
     func clear() {

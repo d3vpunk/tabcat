@@ -6,9 +6,14 @@ with a prompt and ghost text from the same engine, and the app you were working 
 stays frontmost.
 
 What works: the global hotkey, the overlay, the directory chip row, the prompt with
-live predictions, and running a command in a pseudo terminal whose result is fed
-back to the daemon with `learn` — so overlay usage improves the same ranking the
-zsh plugin uses.
+live predictions, running commands in a pseudo terminal whose result is fed back to
+the daemon with `learn` — so overlay usage improves the same ranking the zsh plugin
+uses — and a rail of minimised runs in the bottom-right corner.
+
+Several commands can be in flight at once. Starting one sends the previous card to
+the rail rather than replacing it; ⌘↓ sends the front card away by hand, a click
+brings a badge back. A clean run clears itself from the rail after a few seconds; a
+failed one stays, because an error nobody saw is the same as no error at all.
 
 Not built yet:
 
@@ -20,9 +25,6 @@ Not built yet:
 - **full terminal emulation.** Newlines, carriage returns and escape stripping are
   handled, which covers `git`, `npm`, `docker` and friends. Cursor addressing is
   not, so a full-screen program (`vim`, `git rebase -i`) renders wrong.
-- **several runs at once.** One at a time; Enter is refused while one is running.
-  The badge stack is what lifts that.
-- **cards shrinking into the corner** — exists as a spike, not here.
 - **filtering the chip row by typing** — ⌘-digit and the ⌥ cycle cover the fluent
   path, so this waits until the row is long enough to be worth it.
 
@@ -64,7 +66,9 @@ false alarm on `npm test` trains you to confirm without reading.
 | Tab or → | accept the ghost |
 | Enter | run the line |
 | ⌘Enter | confirm a command that was held back |
-| Escape | drop a held-back command, else clear the line, else dismiss the run |
+| ⌘↓ | send the front card to the rail |
+| click a badge | bring it back to the front |
+| Escape | drop a held-back command, else clear the line, else put the front card away |
 
 The ⌥Space double meaning is deliberate and is why `Controller` tracks whether ⌥
 has been held continuously since the overlay appeared: the hotkey *is* ⌥Space, so

@@ -1,21 +1,25 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import SwiftUI
 
-/// Skeleton of the third tabcat front end: a global hotkey, an overlay that takes
-/// keys without stealing the active app, and a prompt with ghost text from the
-/// same daemon the zsh plugin talks to.
+/// The third tabcat front end: a global hotkey, an overlay that takes keys without
+/// stealing the active app, a prompt with ghost text from the same daemon the zsh
+/// plugin talks to, and runs that can be sent to a rail in the corner.
 ///
-/// Not here yet, on purpose: no PTY (Enter shows what WOULD run) and no `learn`
-/// after a run, so overlay usage does not yet feed the model.
+/// Not here yet: interactive commands (no way to send input, so a `sudo` prompt
+/// hangs) and full terminal emulation (no cursor addressing, so `vim` renders wrong).
 @MainActor
 final class Controller {
     private let panel: OverlayPanel
     private let model = PromptModel()
     private let hotKey = HotKey()
+    private let layout = Layout()
     private var flagsMonitor: Any?
+    private var observer: AnyCancellable?
+    private var shrinkTask: Task<Void, Never>?
 
-    /// Whether ⌥ has been held continuously since the overlay appeared.
+    /// Whether ⌥ has been held continuously since the launcher appeared.
     ///
     /// This is what makes ⌥Space behave like a window switcher. The hotkey IS
     /// ⌥Space, so tapping Space again while ⌥ stays down cannot mean "toggle" —
@@ -24,13 +28,9 @@ final class Controller {
     private var cycling = false
 
     init() {
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        // Sized to the content, not to the screen: a screen-sized transparent
-        // panel swallows every click in its frame, drawn or not.
-        let frame = NSRect(x: screen.midX - 400, y: screen.midY - 150, width: 800, height: 300)
-
-        panel = OverlayPanel(contentRect: frame)
-        panel.contentView = NSHostingView(rootView: PromptView(model: model))
+        panel = OverlayPanel(contentRect: layout.panelOpen)
+        model.panelFrame = layout.panelOpen
+        panel.contentView = NSHostingView(rootView: OverlayContent(model: model, layout: layout))
         model.connect()
     }
 
@@ -41,24 +41,34 @@ final class Controller {
             FileHandle.standardError.write(Data("tabcat-gui: could not register ⌥Space\n".utf8))
         }
         observeModifiers()
-        show()
+        // The frame depends on what is on screen, and that changes from several
+        // places — a card being minimised, a run finishing, the launcher closing.
+        // Reacting to the model beats remembering to call this at every one of them.
+        observer = model.objectWillChange.sink { [weak self] _ in
+            // objectWillChange fires BEFORE the value lands, so the new state is only
+            // readable one turn later.
+            DispatchQueue.main.async { self?.applyFrame() }
+        }
+        showLauncher()
     }
 
     // MARK: - Hotkey
 
     private func hotKeyPressed() {
-        guard panel.isVisible else {
-            show()
+        guard model.launcherVisible, panel.isVisible else {
+            showLauncher()
             return
         }
         if cycling {
             model.selectNext()
         } else {
-            panel.orderOut(nil)
+            hideLauncher()
         }
     }
 
-    private func show() {
+    private func showLauncher() {
+        model.launcherVisible = true
+        applyFrame()
         // makeKeyAndOrderFront on a nonactivating panel takes the keyboard without
         // making this the active application.
         panel.makeKeyAndOrderFront(nil)
@@ -69,6 +79,48 @@ final class Controller {
         // The hotkey is a chord, so ⌥ is down right now — unless the user got here
         // some other way, in which case there is nothing to cycle.
         cycling = NSEvent.modifierFlags.contains(.option)
+    }
+
+    private func hideLauncher() {
+        model.launcherVisible = false
+        cycling = false
+    }
+
+    // MARK: - Frame
+    //
+    // Spike 1: a panel swallows every click inside its frame, drawn or not. So the
+    // frame has to shrink to the rail once the launcher is gone, or the middle of the
+    // screen would stay dead while a badge sits in the corner.
+
+    private func applyFrame() {
+        shrinkTask?.cancel()
+
+        if model.launcherVisible {
+            setFrame(layout.panelOpen)
+            if !panel.isVisible { panel.makeKeyAndOrderFront(nil) }
+            return
+        }
+        if model.runs.isEmpty {
+            panel.orderOut(nil)
+            return
+        }
+        // Growing is immediate, shrinking waits. A card travelling to the corner is
+        // mid-flight right now, and a frame that shrank under it would clip it —
+        // Core Animation and SwiftUI do not share a clock.
+        shrinkTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(700))
+            guard let self, !Task.isCancelled, !self.model.launcherVisible, !self.model.runs.isEmpty else { return }
+            self.setFrame(self.layout.panelClosed)
+        }
+    }
+
+    /// Moves the window and tells the view about it in the same turn. The content's
+    /// positions are screen rects, so nothing moves visually — which is what allows
+    /// the frame to change without fighting an animation.
+    private func setFrame(_ frame: NSRect) {
+        guard panel.frame != frame else { return }
+        panel.setFrame(frame, display: true)
+        model.panelFrame = frame
     }
 
     /// A local monitor is enough: it fires while the panel is key window, which is
@@ -85,24 +137,28 @@ final class Controller {
                     self.cycling = false
                 }
                 return event
+
             case .keyDown:
-                // ⌘1…⌘9 jump straight to a chip. Handled here rather than with
-                // onKeyPress in the view because Command combinations are offered
-                // to the menu bar as key equivalents BEFORE the responder chain
-                // sees them. This app has no menu bar, so they would probably
-                // arrive anyway — but a local monitor runs ahead of both, so there
-                // is nothing left to probably.
-                if event.modifierFlags.contains(.command),
-                   let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
-                   digit >= 1, digit <= 9 {
-                    return self.model.select(digit: digit) ? nil : event
-                }
-                // ⌘Enter confirms a held-back command. Here rather than in the view
-                // for the same reason as the digits — Command combinations reach a
-                // local monitor before the menu and the responder chain.
-                if event.modifierFlags.contains(.command), Int(event.keyCode) == kVK_Return {
-                    self.model.confirmPending()
-                    return nil
+                // Command combinations are offered to the menu bar as key equivalents
+                // BEFORE the responder chain sees them. This app has no menu bar, so
+                // they would probably arrive anyway — but a local monitor runs ahead
+                // of both, so there is nothing left to probably.
+                if event.modifierFlags.contains(.command) {
+                    if let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }), digit >= 1, digit <= 9 {
+                        return self.model.select(digit: digit) ? nil : event
+                    }
+                    switch Int(event.keyCode) {
+                    case kVK_Return:
+                        self.model.confirmPending()
+                        return nil
+                    case kVK_DownArrow:
+                        // Send the card away — the gesture the overlay was designed
+                        // around.
+                        self.model.minimizeForeground()
+                        return nil
+                    default:
+                        break
+                    }
                 }
                 // While ⌥ is held, the arrows walk the chip row instead of moving
                 // the caret. No mode flag needed beyond `cycling`: the modifier is
@@ -113,6 +169,7 @@ final class Controller {
                 case kVK_LeftArrow: self.model.selectPrevious(); return nil
                 default: return event
                 }
+
             default:
                 return event
             }

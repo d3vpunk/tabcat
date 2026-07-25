@@ -26,11 +26,10 @@ struct PromptView: View {
             footer
         }
         .padding(26)
-        .frame(width: 760, alignment: .leading)
-        // .continuous is not cosmetic: the default .circular reads as a hard
-        // corner and does not match the Dock.
+        // The glass hugs the content, so the confirmation card makes it taller and
+        // the empty rest of the launcher box stays transparent. .continuous is not
+        // cosmetic: the default .circular reads as a hard corner, unlike the Dock.
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { focused = true }
     }
 
@@ -125,7 +124,7 @@ struct PromptView: View {
             } else if !model.typed.isEmpty {
                 model.clear()
             } else {
-                model.dismissRun()
+                model.dismissForeground()
             }
             return .handled
         }
@@ -138,9 +137,6 @@ struct PromptView: View {
         VStack(alignment: .leading, spacing: 10) {
             if let pending = model.pending {
                 ConfirmCard(pending: pending)
-            }
-            if let run = model.run {
-                RunCard(run: run)
             }
             Text(model.status)
                 .font(.system(size: 10))
