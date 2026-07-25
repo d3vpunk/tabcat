@@ -30,6 +30,12 @@ struct PromptView: View {
         // the empty rest of the launcher box stays transparent. .continuous is not
         // cosmetic: the default .circular reads as a hard corner, unlike the Dock.
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        // The run card is placed directly below this, so its position depends on how
+        // tall this actually turned out — which changes when a confirmation card
+        // appears.
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            model.launcherHeight = height
+        }
         .onAppear { focused = true }
     }
 

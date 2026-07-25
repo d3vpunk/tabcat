@@ -38,11 +38,16 @@ struct Layout {
         )
     }
 
-    /// The run in front, directly below the launcher.
-    var card: NSRect {
-        NSRect(
+    /// The run in front, directly below the launcher's visible glass.
+    ///
+    /// Takes the measured height because the launcher's box is fixed but its glass
+    /// hugs its content and sits at the box's top edge — going by the box would leave
+    /// the difference as a gap.
+    func card(below launcherHeight: CGFloat) -> NSRect {
+        let top = launcher.maxY - min(launcherHeight, Self.launcherSize.height) - 14
+        return NSRect(
             x: screen.midX - Self.cardSize.width / 2,
-            y: launcher.minY - Self.cardSize.height - 14,
+            y: top - Self.cardSize.height,
             width: Self.cardSize.width,
             height: Self.cardSize.height
         )
@@ -72,8 +77,14 @@ struct Layout {
 
     /// While the launcher is open: everything, so a card can animate from the middle
     /// to the corner without the frame changing under it mid-flight.
+    ///
+    /// Computed for a FULL launcher, which puts the card at its lowest. A shorter
+    /// launcher moves the card up, so this stays a superset and the frame never has
+    /// to change just because the launcher grew a confirmation card.
     var panelOpen: NSRect {
-        launcher.insetBy(dx: -12, dy: -12).union(card.insetBy(dx: -12, dy: -12)).union(rail)
+        launcher.insetBy(dx: -12, dy: -12)
+            .union(card(below: Self.launcherSize.height).insetBy(dx: -12, dy: -12))
+            .union(rail)
     }
 
     /// Launcher closed: only the rail, so the rest of the screen takes clicks again.

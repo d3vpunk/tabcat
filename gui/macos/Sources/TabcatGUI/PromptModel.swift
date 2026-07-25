@@ -30,6 +30,13 @@ final class PromptModel: ObservableObject {
     /// Owned here rather than passed in, because the hosting view has to see it
     /// change in the same update as the content that depends on it.
     @Published var panelFrame: CGRect = .zero
+    /// How tall the launcher's glass actually is.
+    ///
+    /// Measured rather than assumed: the launcher sits in a fixed box, generous
+    /// enough for a confirmation card, but its glass hugs its content and hangs at
+    /// the box's top edge. Positioning the card below the BOX left the unused
+    /// remainder as a visible gap.
+    @Published var launcherHeight: CGFloat = Layout.launcherSize.height
     /// A command held back for confirmation. Waiting rather than running is the
     /// whole point, so this is a state and not a callback.
     @Published private(set) var pending: PendingRun?

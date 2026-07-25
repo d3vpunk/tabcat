@@ -46,11 +46,19 @@ struct OverlayContent: View {
     /// What the animation should react to: which run is where, and how many badges
     /// there are. Output changing must NOT restart it.
     private var signature: String {
-        model.runs.map { "\($0.id)\($0.presentation)" }.joined() + "\(model.launcherVisible)"
+        model.runs.map { "\($0.id)\($0.presentation)" }.joined()
+            + "\(model.launcherVisible)"
+            // So a confirmation card appearing slides the run card down instead of
+            // teleporting it.
+            + "\(Int(model.launcherHeight))"
     }
 
     private func rect(for run: Run) -> CGRect {
-        guard run.presentation == .badge else { return layout.card }
+        guard run.presentation == .badge else {
+            // The last measured height survives the launcher being hidden, so the
+            // card stays where it was instead of jumping when the launcher goes away.
+            return layout.card(below: model.launcherHeight)
+        }
         let index = model.badges.firstIndex { $0 === run } ?? 0
         return layout.badge(index)
     }
