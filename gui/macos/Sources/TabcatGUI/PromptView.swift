@@ -117,10 +117,12 @@ struct PromptView: View {
         // actually there, otherwise the caret must behave normally.
         .onKeyPress(.tab) { model.acceptGhost() ? .handled : .ignored }
         .onKeyPress(.rightArrow) { model.acceptGhost() ? .handled : .ignored }
-        // Escape clears the line first, and only dismisses the run once there is
-        // nothing left to clear — otherwise one key would do two things at once.
+        // Escape has one job at a time, in order of what is most urgent to undo:
+        // drop a held-back command, then clear the line, then dismiss the run.
         .onKeyPress(.escape) {
-            if !model.typed.isEmpty {
+            if model.pending != nil {
+                model.discardPending()
+            } else if !model.typed.isEmpty {
                 model.clear()
             } else {
                 model.dismissRun()
@@ -134,6 +136,9 @@ struct PromptView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let pending = model.pending {
+                ConfirmCard(pending: pending)
+            }
             if let run = model.run {
                 RunCard(run: run)
             }

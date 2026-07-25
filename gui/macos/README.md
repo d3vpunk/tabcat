@@ -31,6 +31,28 @@ rc file exist — most of what a person types is an alias. `TABCAT_PLUGIN_NO_SET
 is set for that shell, or every single run would load tabcat's own plugin, bind
 keys and warm a daemon.
 
+## Commands that are held back
+
+`rm -rf`, `git reset --hard`, `git push --force`, a `>` onto a file that already
+exists, and a dozen shapes like them are not run on Enter. They are shown with what
+they will do and wait for ⌘Enter.
+
+The overlay changed the stakes, which is why this exists. In a terminal a
+destructive command sits in the scrollback next to everything else that happened,
+and it took a deliberate visit to that window to type it. Here it is a hotkey,
+three characters and Enter, with no history on screen afterwards to reconstruct what
+happened.
+
+⌘Enter and not Enter: a confirmation that the triggering key also satisfies is no
+confirmation at all, because a habitual double-tap sails straight through it.
+
+**It is a heuristic against accidents, not a security boundary, and it cannot
+become one.** The command runs through `zsh -ic`, so an alias can expand to anything
+after the scan has looked at it; a variable, a `bash -c` or a script hides its
+contents entirely. The point is to catch the shapes people type by mistake. The
+table in `--check` pins both directions, because a missed `rm -rf` costs work and a
+false alarm on `npm test` trains you to confirm without reading.
+
 ## Keys
 
 | | |
@@ -41,7 +63,8 @@ keys and warm a daemon.
 | ⌘1…⌘5 | jump straight to a chip |
 | Tab or → | accept the ghost |
 | Enter | run the line |
-| Escape | clear the line; with an empty line, dismiss or cancel the run |
+| ⌘Enter | confirm a command that was held back |
+| Escape | drop a held-back command, else clear the line, else dismiss the run |
 
 The ⌥Space double meaning is deliberate and is why `Controller` tracks whether ⌥
 has been held continuously since the overlay appeared: the hotkey *is* ⌥Space, so

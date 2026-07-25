@@ -102,7 +102,63 @@ enum Check {
         line(ptyOK, "pty: exit \(pty.code), output \(pty.output.isEmpty ? "(none)" : "\"\(pty.output.trimmingCharacters(in: .whitespacesAndNewlines))\"")")
         if !ptyOK { ok = false }
 
+        if !hazards() { ok = false }
+
         return ok ? 0 : 1
+    }
+
+    /// The hazard heuristic, as a table.
+    ///
+    /// Written down rather than eyeballed because both failure directions are
+    /// invisible in normal use: a missed `rm -rf` shows up as lost work, and a false
+    /// alarm on `npm test` trains the user to confirm without reading.
+    private static func hazards() -> Bool {
+        // A real file, so the truncating-redirect rule has something to find.
+        let existing = NSTemporaryDirectory() + "tabcat-hazard-probe"
+        FileManager.default.createFile(atPath: existing, contents: Data())
+        defer { try? FileManager.default.removeItem(atPath: existing) }
+
+        let cases: [(command: String, dangerous: Bool)] = [
+            ("rm -rf node_modules", true),
+            ("rm -f secrets.env", true),
+            ("rm /etc/hosts", true),
+            ("rm *.log", true),
+            ("sudo rm -rf /tmp/x", true),
+            ("npm test && rm -rf dist", true),
+            ("git reset --hard origin/main", true),
+            ("git clean -fd", true),
+            ("git push --force origin main", true),
+            ("git branch -D feature", true),
+            ("git checkout -- src/", true),
+            ("dd if=/dev/zero of=disk.img", true),
+            ("docker system prune -a", true),
+            ("npm publish", true),
+            ("psql -c 'drop table users'", true),
+            ("kubectl delete pod api", true),
+            ("echo hi > \(existing)", true),
+
+            ("git status --short", false),
+            ("npm run build", false),
+            ("npm test", false),
+            ("rm note.txt", false),
+            ("git checkout main", false),
+            ("git checkout -b feature", false),
+            ("ls -la", false),
+            ("docker compose up -d", false),
+            ("echo hi >> \(existing)", false),
+            ("echo hi > \(NSTemporaryDirectory())tabcat-not-there-yet", false),
+        ]
+
+        var wrong: [String] = []
+        for probe in cases {
+            let found = HazardScan.scan(command: probe.command, cwd: NSTemporaryDirectory())
+            if found.isEmpty == probe.dangerous {
+                wrong.append("\(probe.dangerous ? "missed" : "false alarm"): \(probe.command)")
+            }
+        }
+        line(wrong.isEmpty, "hazards: \(cases.count - wrong.count)/\(cases.count) as expected")
+        for problem in wrong { print("        \(problem)") }
+        return wrong.isEmpty
     }
 
     /// `--selftest`: proves a run reaches the model. Separate from `--check` because

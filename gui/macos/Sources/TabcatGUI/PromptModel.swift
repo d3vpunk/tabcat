@@ -24,6 +24,15 @@ final class PromptModel: ObservableObject {
     /// The run in the foreground, if any. One at a time for now; the badge stack
     /// that keeps several is the next step.
     @Published private(set) var run: Run?
+    /// A command held back for confirmation. Waiting rather than running is the
+    /// whole point, so this is a state and not a callback.
+    @Published private(set) var pending: PendingRun?
+
+    struct PendingRun {
+        let command: String
+        let cwd: String
+        let hazards: [Hazard]
+    }
 
     private var client: DaemonClient?
 
@@ -192,6 +201,13 @@ final class PromptModel: ObservableObject {
     }
 
     func submit() {
+        // A held-back command must not be confirmable with Enter, so Enter cannot
+        // mean "start something new" while one is waiting either — that would hide
+        // the question behind a fresh prompt.
+        if pending != nil {
+            status = "⌘Enter to run it, Escape to drop it"
+            return
+        }
         let line = typed
         guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         // One at a time until the badge stack exists. Refusing beats silently
@@ -205,13 +221,40 @@ final class PromptModel: ObservableObject {
         handle = ""
 
         Task { [line] in
+            // Scanned AFTER handle expansion: `@deploy` says nothing about what it
+            // does, and the expansion is what actually runs.
             let command = await resolved(line)
             let cwd = self.cwd
-            let run = Run(command: command, cwd: cwd)
-            self.run = run
-            run.start { [weak self] code in
-                self?.report(line: command, cwd: cwd, exitCode: code)
+            let hazards = HazardScan.scan(command: command, cwd: cwd)
+            if hazards.isEmpty {
+                start(command: command, cwd: cwd)
+            } else {
+                pending = PendingRun(command: command, cwd: cwd, hazards: hazards)
+                status = "⌘Enter to run it, Escape to drop it"
             }
+        }
+    }
+
+    /// Confirms a held-back command. Bound to ⌘Enter and not to Enter: a
+    /// confirmation that the triggering key also satisfies is no confirmation at
+    /// all — a habitual double-tap would sail straight through it.
+    func confirmPending() {
+        guard let pending else { return }
+        self.pending = nil
+        start(command: pending.command, cwd: pending.cwd)
+    }
+
+    func discardPending() {
+        guard pending != nil else { return }
+        pending = nil
+        status = "dropped"
+    }
+
+    private func start(command: String, cwd: String) {
+        let run = Run(command: command, cwd: cwd)
+        self.run = run
+        run.start { [weak self] code in
+            self?.report(line: command, cwd: cwd, exitCode: code)
         }
     }
 

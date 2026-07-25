@@ -97,6 +97,13 @@ final class Controller {
                    digit >= 1, digit <= 9 {
                     return self.model.select(digit: digit) ? nil : event
                 }
+                // ⌘Enter confirms a held-back command. Here rather than in the view
+                // for the same reason as the digits — Command combinations reach a
+                // local monitor before the menu and the responder chain.
+                if event.modifierFlags.contains(.command), Int(event.keyCode) == kVK_Return {
+                    self.model.confirmPending()
+                    return nil
+                }
                 // While ⌥ is held, the arrows walk the chip row instead of moving
                 // the caret. No mode flag needed beyond `cycling`: the modifier is
                 // part of the event.
