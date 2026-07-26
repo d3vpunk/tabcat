@@ -135,7 +135,22 @@ final class Run: ObservableObject, Identifiable {
 
     func terminate() {
         guard state == .running else { return }
+        // SwiftTerm's `terminate()` sends SIGTERM and then cancels the dispatch source
+        // that watches for the exit — and that source's handler holds the only
+        // `waitpid` in the library. So nothing reaps the child afterwards and every
+        // stopped run left a zombie behind for as long as the app lived — measured: a
+        // SIGTERMed child that nobody waits for sits in `ps` as `Z`. Reaping it here is
+        // the workaround, and it belongs here rather than in a fork of SwiftTerm.
+        let pid = terminal.process?.shellPid ?? 0
         terminal.terminate()
+        guard pid > 0 else { return }
+        DispatchQueue.global(qos: .utility).async {
+            var ignored: Int32 = 0
+            // Blocking, off the main thread: SIGTERM is already sent, so this returns
+            // as soon as the child is actually gone. The status is nobody's business —
+            // a run is only ever terminated on its way off screen.
+            waitpid(pid, &ignored, 0)
+        }
     }
 }
 

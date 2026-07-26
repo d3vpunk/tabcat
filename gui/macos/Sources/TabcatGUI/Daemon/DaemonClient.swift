@@ -80,7 +80,14 @@ actor DaemonClient {
             }
             // A reply for a different id means the stream is out of step; a late
             // answer would otherwise be read as the response to the next request.
-            guard header[1] == id else {
+            //
+            // One reply is exempt, and it is the daemon's own rule: over its connection
+            // limit it answers `err - busy` and hangs up before it has read the request
+            // line at all (`server.ts:120`), so there is no id yet to echo. Reported as
+            // busy rather than as a desync, because the two say different things about
+            // what to do next.
+            let busyReply = header[0] == "err" && header[1] == "-"
+            guard header[1] == id || busyReply else {
                 dropConnection()
                 throw ClientError.desynced
             }
@@ -90,6 +97,9 @@ actor DaemonClient {
                 if error.isProtocolMismatch {
                     disabledReason = "daemon speaks another protocol (\(error.message))"
                 }
+                // The far end already closed, and a `DaemonError` skips the cleanup in
+                // the catch below because it is an answer, not a transport failure.
+                if busyReply { dropConnection() }
                 throw error
             }
             return rows

@@ -35,6 +35,16 @@ final class PromptModel: ObservableObject {
     @Published private(set) var caret = 0
     /// Ranked candidates for the current line. Empty is a real answer.
     @Published private(set) var candidates: [Candidate] = []
+    /// The caret the list was asked for. A candidate's `replace` counts code points
+    /// backwards from exactly this position, so it is part of the answer, not context.
+    private var candidatesCaret = 0
+
+    /// Whether the list still describes the line as the caret stands in it.
+    ///
+    /// False for the moment between moving the caret and the answer for the new
+    /// position arriving. Nothing may be applied from a stale list: `replace` would cut
+    /// the wrong code points, and the result would be a line that was never shown.
+    private var candidatesAreFresh: Bool { candidatesCaret == min(caret, typed.unicodeScalars.count) }
     /// Which row Enter would take. 0 = the line as typed.
     @Published private(set) var selected = 0
     /// Magic-name handle the daemon offers for this line, or "".
@@ -213,7 +223,15 @@ final class PromptModel: ObservableObject {
     /// daemon on its own, so this both heals the connection and refreshes what is on
     /// screen before the first keystroke rather than after it.
     func refresh() {
-        guard let client else { return }
+        guard let client else {
+            // Nothing resolved when the app started. That can be transient — the
+            // login-shell probe has a ceiling and an rc file loading a version manager
+            // can hit it — so reopening tries again rather than leaving every ⌥Space a
+            // silent no-op until the app is quit. Which is what the paragraph above
+            // promised and this guard used to prevent.
+            connect()
+            return
+        }
         Task {
             do {
                 _ = try await client.request(op: "ping")
@@ -234,6 +252,7 @@ final class PromptModel: ObservableObject {
                 await seedDirectories(reason: "nothing learned yet")
             } else {
                 directories = entries.map { Directory(path: $0.path, learned: true) }
+                seeded = false
                 place(entries.first?.path)
                 status = "ready"
             }
@@ -246,12 +265,25 @@ final class PromptModel: ObservableObject {
         }
     }
 
+    /// Whether the chip row shows a guess rather than what the daemon ranked.
+    ///
+    /// Only the seed reads it, and only to charge for itself once: the scan walks the
+    /// home directory, and reopening the overlay retries the connection, so without
+    /// this a machine that cannot reach a daemon paid for a `find` on every ⌥Space to
+    /// arrive at the same answer.
+    private var seeded = false
+
     private func seedDirectories(reason: String) async {
+        guard !seeded else {
+            status = "\(reason) — directories guessed from git repositories on disk"
+            return
+        }
         let paths = await DirectorySeed.gitRepositories(limit: Self.directoryLimit)
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         directories = paths.isEmpty
             ? [Directory(path: home, learned: false)]
             : paths.map { Directory(path: $0, learned: false) }
+        seeded = true
         place(directories.first?.path)
         status = "\(reason) — directories guessed from git repositories on disk"
     }
@@ -340,6 +372,7 @@ final class PromptModel: ObservableObject {
                 guard line == typed, cwd == self.cwd else { return }
                 handle = prediction.handleHint
                 candidates = prediction.candidates
+                candidatesCaret = cursor
                 // A shorter list must not leave the selection pointing past its end.
                 selected = min(selected, max(0, prediction.candidates.count - 1))
                 // A previous failure would otherwise stay on screen forever, since
@@ -347,10 +380,14 @@ final class PromptModel: ObservableObject {
                 if status != "ready" { status = "ready" }
             } catch let error as DaemonError where error.isWarming {
                 // Normal right after a cold start; the next keystroke tries again.
-                guard line == typed else { return }
+                // Guarded on the directory as well as the line, exactly like the answer
+                // above: ⌥-cycling asks again without touching the typed text, so a
+                // late failure for the directory the user just left would otherwise
+                // clear the list that had already arrived for the one they are on.
+                guard line == typed, cwd == self.cwd else { return }
                 candidates = []
             } catch {
-                guard line == typed else { return }
+                guard line == typed, cwd == self.cwd else { return }
                 candidates = []
                 status = describe(error)
             }
@@ -384,9 +421,31 @@ final class PromptModel: ObservableObject {
     /// ghost, so anything without a ghost could not be accepted at all.
     func acceptCurrent() -> Bool {
         guard let candidate = current else { return false }
+        // Moving the caret alone asks for a new list but leaves the old one standing
+        // until the answer arrives, and `replace` counts backwards from the caret the
+        // daemon was asked about. Splicing the old list against the new caret produced a
+        // line that was never on screen: `cd doc` with `Documents/` at replace 3, caret
+        // dragged back to 3, Tab — `Documents/doc`. `ghostText` heals itself with a
+        // prefix check against the text it claims to continue; this has to be told.
+        guard candidatesAreFresh else { return false }
         let next = acceptedLine(for: candidate, line: typed, caret: caret)
         guard next != typed else { return false }
         apply(next, caret: acceptedCaret(for: candidate, line: typed, caret: caret))
+        return true
+    }
+
+    /// Tab: accept, or step to the next candidate when there is nothing left to accept.
+    ///
+    /// The double meaning Tab has in the REPL (`prompt-state.ts:163`), and it is what
+    /// makes the key useful on a command already typed out in full — there is nothing to
+    /// insert, so the only thing left to do with it is offer the next one.
+    ///
+    /// Here rather than in the view: it is a rule about candidates, and every other key
+    /// the view maps hands off to exactly one method.
+    @discardableResult
+    func tab() -> Bool {
+        if acceptCurrent() { return true }
+        moveSelection(by: 1)
         return true
     }
 
@@ -460,7 +519,13 @@ final class PromptModel: ObservableObject {
         // purpose: every edit puts the selection back on the top row. Before the
         // empty check, because the list on an empty line is the whole point of
         // opening the overlay with something on screen.
-        if selected > 0, acceptCurrent() { return }
+        if selected > 0 {
+            // A refused accept on a stale list must not fall through to running the
+            // typed line: the user chose a row, and running something else instead of
+            // filling it in is the one outcome the two-stage Enter exists to prevent.
+            // Waiting is safe, the fresh list is one round trip away.
+            if acceptCurrent() || !candidatesAreFresh { return }
+        }
 
         let line = typed
         guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }

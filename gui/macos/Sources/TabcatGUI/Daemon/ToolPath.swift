@@ -54,6 +54,13 @@ actor ToolPath {
 
     private var cached: Tooling?
 
+    /// Only an answer that actually resolved is remembered.
+    ///
+    /// A failure is not the same fact as a success. `askLoginShell` has a ceiling, and
+    /// an rc file that loads a version manager can hit it — caching that gave "tabcat
+    /// is not installed" and "the shell was slow once" the same permanent answer, and
+    /// the overlay then stayed dead until the app was quit, because nothing ever asked
+    /// a second time.
     func resolve() async -> Tooling {
         if let cached { return cached }
         let inherited = Tooling(
@@ -69,11 +76,9 @@ actor ToolPath {
             cached = resolved
             return resolved
         }
-        guard let fromShell = await askLoginShell() else {
-            cached = inherited
-            return inherited
-        }
-        let resolved = fromShell.with(socketPath: await probe(fromShell))
+        guard let fromShell = await askLoginShell() else { return inherited }
+        guard let socket = await probe(fromShell) else { return fromShell }
+        let resolved = fromShell.with(socketPath: socket)
         cached = resolved
         return resolved
     }

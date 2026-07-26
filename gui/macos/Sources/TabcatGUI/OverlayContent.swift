@@ -1,6 +1,27 @@
 import AppKit
 import SwiftUI
 
+/// How cards move, and how long the window has to wait for them.
+///
+/// One place for both numbers because they are one decision. A panel that shrinks to
+/// the rail while a card is still flying towards it clips the card, so the wait has to
+/// outlast the spring — and the two used to sit in different files, coupled by nothing
+/// but a comment asking the next reader to remember. Slower or less damped here now
+/// lengthens the wait by itself.
+enum Motion {
+    private static let response = 0.45
+    private static let dampingFraction = 0.82
+
+    static let spring = Animation.spring(response: response, dampingFraction: dampingFraction)
+
+    /// How long the panel waits before shrinking around the rail.
+    ///
+    /// A spring at this damping looks finished after roughly one and a half responses;
+    /// the rest is margin for a slower machine, which is where the hand-tuned pair used
+    /// to break — invisibly, and only there.
+    static let settle = Duration.milliseconds(Int(response * 1_600))
+}
+
 /// Everything the panel draws.
 ///
 /// Cards are positioned absolutely rather than stacked in a VStack, and that is not
@@ -49,11 +70,7 @@ struct OverlayContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // One spring for every card's position and size at once, which is what makes
         // a card look like it travelled rather than like it was replaced.
-        //
-        // Its settling time is what the Controller's shrink delay has to outlast: a
-        // panel that shrinks to the rail while a card is still flying towards it
-        // clips the card. Slower or less damped here means a longer wait there.
-        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: signature)
+        .animation(Motion.spring, value: signature)
     }
 
     /// What the animation should react to: which run is where, and how many badges

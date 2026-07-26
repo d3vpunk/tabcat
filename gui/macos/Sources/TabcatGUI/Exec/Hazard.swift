@@ -35,9 +35,10 @@ enum HazardScan {
         // exactly the shape that slips past a check that only reads the first word.
         for segment in segments(of: command) {
             let tokens = segment.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-            guard let program = program(of: tokens) else { continue }
+            guard let resolved = invocation(of: tokens) else { continue }
+            let program = resolved.program
             // Everything after the wrappers and the program name itself.
-            let start = leadingWrappers(tokens) + 1
+            let start = resolved.argumentsFrom
             let arguments = start < tokens.count ? Array(tokens[start...]) : []
             let flags = arguments.filter { $0.hasPrefix("-") }
             let operands = arguments.filter { !$0.hasPrefix("-") }
@@ -58,22 +59,30 @@ enum HazardScan {
                 }
 
             case "git":
-                let joined = arguments.joined(separator: " ")
-                if operands.first == "reset", joined.contains("--hard") {
+                // git's global options sit in FRONT of the subcommand, and two of them
+                // take a separate value — `git -C <dir> reset --hard` therefore put the
+                // directory where every test below looks for the subcommand, and the
+                // whole line went unflagged. Dropped before the split, not worked
+                // around in each test.
+                let subcommand = withoutGitGlobals(arguments)
+                let gitFlags = subcommand.filter { $0.hasPrefix("-") }
+                let gitOperands = subcommand.filter { !$0.hasPrefix("-") }
+                let joined = subcommand.joined(separator: " ")
+                if gitOperands.first == "reset", joined.contains("--hard") {
                     add("discards every uncommitted change in the working tree")
                 }
-                if operands.first == "clean", flags.contains(where: { $0.contains("f") }) {
+                if gitOperands.first == "clean", gitFlags.contains(where: { $0.contains("f") }) {
                     add("deletes untracked files, which were never in a commit to recover from")
                 }
-                if operands.first == "checkout" || operands.first == "restore" {
-                    if operands.contains(".") || joined.contains("--") {
+                if gitOperands.first == "checkout" || gitOperands.first == "restore" {
+                    if gitOperands.contains(".") || joined.contains("--") {
                         add("throws away local edits to the named paths")
                     }
                 }
-                if operands.first == "push", flags.contains(where: { $0 == "-f" || $0.hasPrefix("--force") }) {
+                if gitOperands.first == "push", gitFlags.contains(where: { $0 == "-f" || $0.hasPrefix("--force") }) {
                     add("rewrites history on the remote, for everyone who already pulled it")
                 }
-                if operands.first == "branch", flags.contains(where: { $0.contains("D") }) {
+                if gitOperands.first == "branch", gitFlags.contains(where: { $0.contains("D") }) {
                     add("deletes a branch even if it was never merged")
                 }
 
@@ -145,6 +154,16 @@ enum HazardScan {
     /// Words that stand in front of the real command without being it.
     private static let wrappers: Set<String> = ["sudo", "command", "env", "nice", "nohup", "time", "doas", "xargs"]
 
+    /// The programs the switch above knows by name.
+    ///
+    /// Read only by the fallback in `invocation(of:)`. A name missing here weakens that
+    /// fallback; it cannot weaken the ordinary path, which never consults this.
+    private static let watched: Set<String> = [
+        "rm", "git", "dd", "diskutil", "mkfs", "newfs", "newfs_hfs", "newfs_apfs",
+        "truncate", "shred", "srm", "docker", "podman", "npm", "pnpm", "yarn", "bun",
+        "kubectl",
+    ]
+
     private static func leadingWrappers(_ tokens: [String]) -> Int {
         var count = 0
         for token in tokens {
@@ -154,15 +173,49 @@ enum HazardScan {
         return count
     }
 
-    private static func program(of tokens: [String]) -> String? {
+    /// The program a segment runs, and the index its arguments start at.
+    private static func invocation(of tokens: [String]) -> (program: String, argumentsFrom: Int)? {
         let index = leadingWrappers(tokens)
         guard tokens.indices.contains(index) else { return nil }
         // Full paths count: /bin/rm is rm.
-        return (tokens[index] as NSString).lastPathComponent
+        let name = (tokens[index] as NSString).lastPathComponent
+        guard name.hasPrefix("-") else { return (name, index + 1) }
+
+        // We landed on a wrapper's own option. `leadingWrappers` stops at the first
+        // token that is neither a wrapper nor an assignment, so `sudo -u root rm -rf /`
+        // stopped at `-u` and `xargs -0 rm -rf x` at `-0` — and a flag matches no case
+        // at all, which turned the scan off for the whole segment.
+        //
+        // Counting how many tokens the option ate is not possible from here: `-u` takes
+        // a value and `-0` does not, and which is which differs per wrapper. Look for a
+        // name this scanner knows instead. Reached only when the positional answer is a
+        // flag, so `echo rm -rf /` still resolves to `echo` and stays quiet.
+        guard let found = tokens.indices.dropFirst(index).first(where: {
+            watched.contains((tokens[$0] as NSString).lastPathComponent)
+        }) else { return nil }
+        return ((tokens[found] as NSString).lastPathComponent, found + 1)
     }
 
-    /// `> file` truncates; `>>` appends and is left alone. Only reported when the
-    /// file is actually there — warning about creating a new one would be noise.
+    /// git's global options, dropped so the subcommand is first again.
+    ///
+    /// Everything before the subcommand is a global by definition, so leading flags go
+    /// unconditionally; these are the ones that take a separate value and therefore eat
+    /// the token after them as well.
+    private static let gitGlobalsTakingValue: Set<String> = [
+        "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix",
+    ]
+
+    private static func withoutGitGlobals(_ arguments: [String]) -> [String] {
+        var index = 0
+        while index < arguments.count, arguments[index].hasPrefix("-") {
+            index += gitGlobalsTakingValue.contains(arguments[index]) ? 2 : 1
+        }
+        return index < arguments.count ? Array(arguments[index...]) : []
+    }
+
+    /// `> file` truncates; `>>` appends and is left alone. Only reported when a regular
+    /// file is actually there — warning about creating a new one would be noise, and so
+    /// would warning about a device.
     private static func truncatedFile(in command: String, cwd: String) -> String? {
         let characters = Array(command)
         var index = 0
@@ -187,8 +240,13 @@ enum HazardScan {
             let cleaned = target.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
             if !cleaned.isEmpty {
                 let path = cleaned.hasPrefix("/") ? cleaned : (cwd as NSString).appendingPathComponent(cleaned)
-                var isDirectory: ObjCBool = false
-                if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue {
+                // Regular files only. `> /dev/null` is the most common redirect there
+                // is, and /dev/null exists and is not a directory — so a
+                // "exists and is not a directory" test claimed `npm test > /dev/null`
+                // overwrites a file, which is precisely the false alarm that teaches
+                // the user to confirm without reading. Same for /dev/tty and friends.
+                var info = stat()
+                if stat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG {
                     return cleaned
                 }
             }

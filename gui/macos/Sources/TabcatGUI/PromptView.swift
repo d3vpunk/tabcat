@@ -144,11 +144,7 @@ struct PromptView: View {
     private func key(_ key: PromptField.PromptKey) -> Bool {
         switch key {
         case .accept:
-            // Accept, or step to the next candidate when there is nothing left to
-            // accept — the double meaning Tab has in the REPL
-            // (`prompt-state.ts:163`), for every command already typed out in full.
-            if !model.acceptCurrent() { model.moveSelection(by: 1) }
-            return true
+            return model.tab()
         case .undo:
             return model.undoAccept()
         case .chunk:

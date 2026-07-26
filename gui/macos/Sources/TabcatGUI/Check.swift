@@ -162,13 +162,25 @@ enum Check {
             : "a command that exits the shell wrote a directory anyway")
         if !silent { ok = false }
 
+        if tables() != 0 { ok = false }
+
+        return ok ? 0 : 1
+    }
+
+    /// `--tables`: the pinned tables on their own, with no daemon and no pty.
+    ///
+    /// Split out so something automatic can run them. `--check` needs a daemon on a
+    /// socket and a login shell that can find `tabcat`, and a build runner has neither
+    /// — so six tables over pure functions, the only thing resembling a test the Swift
+    /// side has, ran nowhere but on the author's machine when he remembered to ask.
+    static func tables() -> Int32 {
+        var ok = true
         if !exitStatus() { ok = false }
         if !hazards() { ok = false }
         if !accepting() { ok = false }
         if !chunking() { ok = false }
         if !navigation() { ok = false }
         if !layout() { ok = false }
-
         return ok ? 0 : 1
     }
 
@@ -215,8 +227,17 @@ enum Check {
             ("rm /etc/hosts", true),
             ("rm *.log", true),
             ("sudo rm -rf /tmp/x", true),
+            // A wrapper's own option used to resolve as the program, which matched no
+            // case and turned the scan off for the segment.
+            ("sudo -u root rm -rf /", true),
+            ("find . -print0 | xargs -0 rm -rf ./build", true),
             ("npm test && rm -rf dist", true),
             ("git reset --hard origin/main", true),
+            // git's globals come before the subcommand; `-C <dir>` put the directory
+            // where every subcommand test looks.
+            ("git -C /tmp reset --hard", true),
+            ("git -c user.email=x push --force", true),
+            ("git --no-pager clean -fd", true),
             ("git clean -fd", true),
             ("git push --force origin main", true),
             ("git branch -D feature", true),
@@ -238,6 +259,14 @@ enum Check {
             ("docker compose up -d", false),
             ("echo hi >> \(existing)", false),
             ("echo hi > \(NSTemporaryDirectory())tabcat-not-there-yet", false),
+            // A device is not a file worth saving. /dev/null exists and is not a
+            // directory, so the old test warned about the commonest redirect there is.
+            ("npm test > /dev/null 2>&1", false),
+            ("echo hi > /dev/null", false),
+            // The fallback that finds a program behind a wrapper's options must not
+            // fire when the positional answer is a perfectly good program.
+            ("echo rm -rf /", false),
+            ("man rm", false),
         ]
 
         var wrong: [String] = []
@@ -286,6 +315,21 @@ enum Check {
             check(open.contains(launcher), "launcher is outside the open panel")
             check(open.contains(card), "card is outside the open panel — it would be clipped")
             check(closed.contains(layout.badge(0)), "badge is outside the closed panel")
+
+            // Past the reserved capacity, which is the entire reason `rail(badges:)`
+            // takes a count: the rail grows rather than a run being dropped to keep it
+            // short. Every probe used to ask for zero badges, so the one behaviour the
+            // rail exists for was the one thing this table never looked at — a rail that
+            // capped instead of growing would have passed, and the extra badges would
+            // have been clipped away by the panel exactly like the bug that put this
+            // table here.
+            for crowded in [Layout.railCapacity + 1, Layout.railCapacity + 2] {
+                let last = layout.badge(crowded - 1)
+                check(layout.panelClosed(badges: crowded).contains(last),
+                      "badge \(crowded - 1) of \(crowded) is outside the closed panel")
+                check(layout.panelOpen(badges: crowded).contains(last),
+                      "badge \(crowded - 1) of \(crowded) is outside the open panel")
+            }
         }
         line(wrong.isEmpty, "layout: \(screens.count) screens, \(wrong.count) problem(s)")
         for problem in wrong { print("        \(problem)") }

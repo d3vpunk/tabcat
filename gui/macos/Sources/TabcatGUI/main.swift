@@ -49,7 +49,15 @@ final class Controller {
         let registered = hotKey.register(combo) { [weak self] in self?.hotKeyPressed() }
         if !registered {
             // A dead shortcut with no explanation is worse than a visible failure.
-            FileHandle.standardError.write(Data("tabcat-gui: could not register \(combo.description)\n".utf8))
+            //
+            // Both channels on purpose: stderr is what a `swift run` shows, and the
+            // bundled app has no terminal attached at all — there `log stream` is the
+            // only way to see this, which is the command `bundle.sh` prints.
+            // Named, because the log interpolation is an autoclosure and would
+            // otherwise have to capture self to reach the property.
+            let described = combo.description
+            FileHandle.standardError.write(Data("tabcat-gui: could not register \(described)\n".utf8))
+            Log.app.error("could not register \(described, privacy: .public)")
         }
         observeModifiers()
         // Escape that nothing in the content took. The panel asks rather than hiding
@@ -167,14 +175,10 @@ final class Controller {
         }
         // Growing is immediate, shrinking waits. A card travelling to the corner is
         // mid-flight right now, and a frame that shrank under it would clip it —
-        // Core Animation and SwiftUI do not share a clock.
-        //
-        // This must outlast the spring in `OverlayContent.body`. The two numbers are
-        // coupled and live in different files, so changing that animation to be
-        // slower, or less damped, means changing this one — otherwise the clipping
-        // comes back silently, and only on whichever machine happens to be slower.
+        // Core Animation and SwiftUI do not share a clock. How long to wait is derived
+        // from the spring itself, in `Motion`.
         shrinkTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(700))
+            try? await Task.sleep(for: Motion.settle)
             guard let self, !Task.isCancelled, !self.model.launcherVisible, !self.model.runs.isEmpty else { return }
             self.setFrame(self.layout.panelClosed(badges: self.model.badges.count))
         }
@@ -250,6 +254,10 @@ setvbuf(stdout, nil, _IONBF, 0)
 // to report a broken socket path or a protocol mismatch.
 if CommandLine.arguments.contains("--check") {
     exit(await Check.run())
+}
+// The tables alone: no daemon, no socket, no pty, so a build runner can gate on them.
+if CommandLine.arguments.contains("--tables") {
+    exit(Check.tables())
 }
 // Separate flag because it appends a history entry, unlike --check.
 if CommandLine.arguments.contains("--selftest") {
