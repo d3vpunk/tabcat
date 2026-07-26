@@ -26,6 +26,18 @@ enum Check {
         let tooling = await ToolPath.shared.resolve()
         line(true, "tabcat binary: \(tooling.binary)")
 
+        // Reported because a resource resolves differently in the two builds: under
+        // `swift run` the bundle sits next to the binary, in the app it has to have been
+        // copied into Contents/Resources. That difference is exactly what cost a session
+        // with `ToolPath`, so run this diagnostic FROM the bundle to mean anything:
+        // `build/Tabcat.app/Contents/MacOS/TabcatGUI --check`.
+        let marks = [("light", Branding.onLight), ("dark", Branding.onDark)]
+        let missing = marks.filter { $0.1 == nil }.map(\.0)
+        line(missing.isEmpty, missing.isEmpty
+            ? "wordmark: \(marks.compactMap { $0.1 }.map { "\(Int($0.size.width))×\(Int($0.size.height))" }.joined(separator: ", "))"
+            : "wordmark: \(missing.joined(separator: " and ")) missing — was the resource bundle copied?")
+        if !missing.isEmpty { ok = false }
+
         let path: String
         do {
             path = try DaemonClient.resolveSocketPath(tooling: tooling)

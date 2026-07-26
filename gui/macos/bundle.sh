@@ -25,6 +25,18 @@ mkdir -p "$APP/Contents/MacOS"
 cp ".build/$CONFIG/TabcatGUI" "$APP/Contents/MacOS/TabcatGUI"
 cp Info.plist "$APP/Contents/Info.plist"
 
+# SwiftPM puts processed resources in a bundle of their own next to the binary, and
+# `Bundle.module` looks for it beside the executable or in the app's Resources. Without
+# this the wordmark silently goes missing in the bundled app while it is there under
+# `swift run` — the kind of difference between the two builds that took a whole
+# debugging session the last time (`ToolPath`). Every generated bundle is carried, not
+# just ours: SwiftTerm ships its Metal shaders the same way.
+mkdir -p "$APP/Contents/Resources"
+for resources in ".build/$CONFIG/"*.bundle; do
+	[ -e "$resources" ] || continue
+	cp -R "$resources" "$APP/Contents/Resources/"
+done
+
 if [ -n "$IDENTITY" ]; then
 	codesign --force --sign "$IDENTITY" "$APP"
 else

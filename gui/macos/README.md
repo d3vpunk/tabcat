@@ -161,6 +161,20 @@ killall TabcatGUI 2>/dev/null; open build/Tabcat.app
 The `killall` is not optional — `open` otherwise sometimes brings the already
 running instance forward, and you debug code that is not running.
 
+`bundle.sh` also copies the SwiftPM resource bundles into `Contents/Resources`.
+Without that step `Bundle.module` finds nothing once the app is bundled, while the
+same code works under `swift run` — the wordmark would go missing in one build and
+not the other.
+
+### The wordmark
+
+`Sources/TabcatGUI/Resources` holds two files, both derived from `logo-text.png` in
+this directory: cropped to the mark plus a little glow and scaled to 440 px wide.
+`logo-text-on-dark.png` additionally has the near-black "tab" lightened, keyed on
+saturation so the purple "cat" is untouched. Two files rather than one tinted
+template, because the two-tone is the logo; and near-black on the dark glass is a
+smudge, not a word.
+
 ## Diagnosing
 
 An `LSUIElement` app has nowhere to print, so a broken socket path or a protocol
@@ -170,9 +184,11 @@ mismatch would simply look like "the overlay does nothing". Hence:
 swift run TabcatGUI --check
 ```
 
-It resolves the socket path, pings, asks for `cwds` and one prediction, runs three
-pty probes (exit code, a progress bar redrawing in place, the `pwd` wrapper), and
-finishes with the pinned tables below — reporting each step. `bad_op: unknown op:
+It resolves the socket path and the wordmark's resource bundle, pings, asks for
+`cwds` and one prediction, runs three pty probes (exit code, a progress bar redrawing
+in place, the `pwd` wrapper), and finishes with the pinned tables below — reporting
+each step. Run it from inside the app (`build/Tabcat.app/Contents/MacOS/TabcatGUI
+--check`) to test what the bundled build sees rather than what `swift run` does. `bad_op: unknown op:
 cwds` means the *running daemon* predates the op — restart it with `tabcat daemon
 stop`.
 

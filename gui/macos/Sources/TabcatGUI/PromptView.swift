@@ -16,6 +16,9 @@ enum Typeface {
 struct PromptView: View {
     @ObservedObject var model: PromptModel
     @Namespace private var chipGlass
+    /// Which wordmark to draw: the glass follows the system appearance, and half the
+    /// logo is near-black.
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -304,9 +307,32 @@ struct PromptView: View {
             if let pending = model.pending {
                 ConfirmCard(pending: pending)
             }
-            Text(model.status)
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+            // Status and wordmark share the bottom line, aligned on their baselines.
+            // The status wraps when it is long and the mark stays in the corner, which
+            // is why it sits in this row rather than in an overlay: a mark drawn over
+            // the glass would land on top of a long message instead of beside it.
+            HStack(alignment: .bottom, spacing: 12) {
+                Text(model.status)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 12)
+                wordmark
+            }
+        }
+    }
+
+    /// Bottom right, quiet on purpose: it says whose window this is, and it must not
+    /// compete with the line of status text beside it.
+    @ViewBuilder private var wordmark: some View {
+        if let image = Branding.wordmark(dark: colorScheme == .dark) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(height: 13)
+                .opacity(0.75)
+                // Decoration. It carries no information a screen reader has not already
+                // been told by the window itself.
+                .accessibilityHidden(true)
         }
     }
 

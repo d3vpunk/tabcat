@@ -25,6 +25,10 @@ let package = Package(
             name: "TabcatGUI",
             dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
             path: "Sources/TabcatGUI",
+            // The wordmark in the launcher's corner. Processed rather than copied, so
+            // SwiftPM generates the `Bundle.module` accessor that finds it — the app
+            // bundle then has to carry that resource bundle, which `bundle.sh` does.
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]
