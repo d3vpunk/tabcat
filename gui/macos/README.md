@@ -124,7 +124,6 @@ Whatever the combination is, its modifiers are the hold-to-cycle chord: the tabl
 above says ⌥ because that is the default, but with `ctrl cmd s` it is ⌃⌘ that is held
 and `s` that steps to the next directory. Two neighbours to avoid: **⌃⌘Space is the
 Emoji picker** and ⌃Space switches input sources.
-| Escape | drop a held-back command, else clear the line, else put the front card away |
 
 The ⌥Space double meaning is deliberate and is why `Controller` tracks whether ⌥
 has been held continuously since the overlay appeared: the hotkey *is* ⌥Space, so
@@ -171,9 +170,19 @@ mismatch would simply look like "the overlay does nothing". Hence:
 swift run TabcatGUI --check
 ```
 
-It resolves the socket path, pings, asks for `cwds` and one prediction, and reports
-each step. `bad_op: unknown op: cwds` means the *running daemon* predates the op —
-restart it with `tabcat daemon stop`.
+It resolves the socket path, pings, asks for `cwds` and one prediction, runs three
+pty probes (exit code, a progress bar redrawing in place, the `pwd` wrapper), and
+finishes with the pinned tables below — reporting each step. `bad_op: unknown op:
+cwds` means the *running daemon* predates the op — restart it with `tabcat daemon
+stop`.
+
+```sh
+swift run TabcatGUI --tables
+```
+
+Only the tables: exit-status decoding, the hazard scan, accepting, chunking,
+navigation and the layout, all of them pure functions over pinned cases. No daemon,
+no socket, no pty — which is why this and not `--check` is what CI gates on.
 
 ```sh
 TABCAT_SOCKET=/tmp/scratch.sock swift run TabcatGUI --selftest
