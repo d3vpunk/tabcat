@@ -192,6 +192,7 @@ enum Check {
         if !accepting() { ok = false }
         if !chunking() { ok = false }
         if !navigation() { ok = false }
+        if !paths() { ok = false }
         if !layout() { ok = false }
         return ok ? 0 : 1
     }
@@ -289,6 +290,44 @@ enum Check {
             }
         }
         line(wrong.isEmpty, "hazards: \(cases.count - wrong.count)/\(cases.count) as expected")
+        for problem in wrong { print("        \(problem)") }
+        return wrong.isEmpty
+    }
+
+    /// The badge's directory line, as a table.
+    ///
+    /// Pinned because it is arithmetic over a budget with three prefixes, and every way
+    /// it can be wrong is quiet: a label one component too short is merely useless
+    /// (`…/frontend` names no project), and one too long is silently cut by the view,
+    /// which looks the same as a path that happened to be long.
+    private static func paths() -> Bool {
+        let home = "/Users/j"
+        let cases: [(path: String, expected: String)] = [
+            ("/Users/j", "~"),
+            ("/Users/j/", "~"),
+            ("/Users/j/projects/tabby", "~/projects/tabby"),
+            ("/Users/j/projects/tabby/gui/macos", "~/projects/tabby/gui/macos"),
+            // 41 characters with its `~/`, so the front goes and two components stay —
+            // which is the whole point: `frontend` alone names no project.
+            ("/Users/j/projects/api-rm-prestonpalace-nl/frontend", "…/api-rm-prestonpalace-nl/frontend"),
+            // Outside home: complete while it fits, and it keeps its leading slash.
+            ("/usr/local/etc", "/usr/local/etc"),
+            ("/Users/other/projects/tabby", "/Users/other/projects/tabby"),
+            // One component that blows the budget on its own is still the only thing
+            // that identifies the directory.
+            ("/Users/j/a-directory-with-a-really-very-long-name", "~/a-directory-with-a-really-very-long-name"),
+            ("/", "/"),
+            ("", ""),
+        ]
+
+        var wrong: [String] = []
+        for probe in cases {
+            let got = PathLabel.trail(of: probe.path, home: home)
+            if got != probe.expected {
+                wrong.append("\(probe.path.isEmpty ? "(empty)" : probe.path) -> \(got), want \(probe.expected)")
+            }
+        }
+        line(wrong.isEmpty, "paths: \(cases.count - wrong.count)/\(cases.count) as expected")
         for problem in wrong { print("        \(problem)") }
         return wrong.isEmpty
     }

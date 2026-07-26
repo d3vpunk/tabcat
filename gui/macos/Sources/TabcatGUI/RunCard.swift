@@ -26,10 +26,39 @@ struct RunCard: View {
 
     @State private var hovering = false
 
+    /// The status dot gets a column of its own so the line under it can line up with the
+    /// command rather than with the dot. A fixed width is what makes that arithmetic
+    /// rather than a guess — the glyph changes with the state and would otherwise move
+    /// the text under it.
+    private static let dotColumn: CGFloat = 10
+    private static let headerSpacing: CGFloat = 8
+
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 0 : 8) {
+        VStack(alignment: .leading, spacing: compact ? 3 : 8) {
             header
-            if !compact {
+            if compact {
+                // The badge's second line was empty, and where a command runs is the
+                // other half of which run this is: two `⚡pest` badges are the same
+                // shortcut in two projects. Muted, because it is context and not the
+                // thing itself.
+                //
+                // It fits by arithmetic, not by hope: 28 pt of padding plus a 13 pt line
+                // at Menlo 11, this spacing, and a 10 pt line at Menlo 9 comes to 54 of
+                // the badge's 56 (line heights measured, not assumed). A larger typeface
+                // needs a taller `Layout.badgeSize` — the card anchors its content to the
+                // top, so what does not fit is clipped away silently.
+                Text(PathLabel.trail(of: run.cwd))
+                    .font(Typeface.small(9))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    // From the front: a path that still does not fit loses the part
+                    // furthest from what it identifies.
+                    .truncationMode(.head)
+                    // Lined up with the command above rather than with the status dot,
+                    // so the two lines read as one block. Derived from the dot's column
+                    // and the header's spacing instead of measured off a screenshot.
+                    .padding(.leading, Self.dotColumn + Self.headerSpacing)
+            } else {
                 output
             }
         }
@@ -48,8 +77,9 @@ struct RunCard: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Self.headerSpacing) {
             statusDot
+                .frame(width: Self.dotColumn)
             title
                 .font(Typeface.small(compact ? 11 : 12))
                 .lineLimit(1)

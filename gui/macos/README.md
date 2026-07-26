@@ -47,6 +47,13 @@ A badge is 300 pt wide, so it shows its magic name where the command has one —
 part every one of them has in common. Resolved when the command is submitted, from
 the same `names` the REPL and the plugin write to, and either way: the line typed
 *was* the handle, or the daemon happens to have a name for the line typed in full.
+Underneath it, muted, the directory the command runs in — two `⚡pest` badges are the
+same shortcut in two projects. As much of the END of the path as fits: `~/projects/tabby`
+whole, `…/api-rm-prestonpalace-nl/frontend` once it does not, because the last component
+names the directory and the front of the path is what every path here has in common.
+The chips can get away with `frontend` alone since the selected one is spelled out in
+full below the row; a badge in the corner has no such neighbour.
+
 The card in front keeps showing the command, since there is room for it and the
 terminal underneath is showing that command's output.
 

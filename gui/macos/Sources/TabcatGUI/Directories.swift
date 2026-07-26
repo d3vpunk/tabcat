@@ -24,6 +24,66 @@ struct Directory: Identifiable, Equatable {
     }
 }
 
+/// Shortens a path for somewhere with no room for it.
+///
+/// The chips get away with the last component alone because the selected one is spelled
+/// out in full underneath the row. A badge in the rail has no such neighbour: `frontend`
+/// there does not say which project, and this machine has several.
+///
+/// So: as much of the END as fits. The last component names the directory, the ones
+/// before it are the context that tells them apart, and the front of the path is the
+/// part every path on the machine has in common.
+enum PathLabel {
+    /// `~` for home, `~/projects/tabby` while the whole thing fits, and
+    /// `…/prestonpalace-nl/frontend` once it does not.
+    ///
+    /// A budget in characters and not in points: the label is drawn in a monospaced
+    /// font, where the two are the same thing, and a view that measured text would have
+    /// to measure it again on every frame.
+    static func trail(
+        of path: String,
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        budget: Int = 40
+    ) -> String {
+        let cleaned = withoutTrailingSlash(path)
+        guard !cleaned.isEmpty else { return "" }
+        guard cleaned != "/" else { return "/" }
+        let root = withoutTrailingSlash(home)
+        if !root.isEmpty, cleaned == root { return "~" }
+
+        let insideHome = !root.isEmpty && cleaned.hasPrefix(root + "/")
+        let relative = insideHome ? String(cleaned.dropFirst(root.count + 1)) : cleaned
+        let components = relative.split(separator: "/").map(String.init)
+        guard !components.isEmpty else { return cleaned }
+
+        var kept: [String] = []
+        for component in components.reversed() {
+            let assembled = ([component] + kept).count - 1 + component.count
+                + kept.reduce(0) { $0 + $1.count }
+            // The prefix costs characters too, so it counts against the budget: giving
+            // up a component to make room for the `…/` that says a component was given
+            // up would be a trade for nothing.
+            let complete = kept.count + 1 == components.count
+            let prefix = complete ? (insideHome ? 2 : (cleaned.hasPrefix("/") ? 1 : 0)) : 2
+            // At least one component always, whatever it costs. A name too long for the
+            // badge is still the only thing that identifies the directory; the view
+            // truncates it at the front, where a path carries the least.
+            if !kept.isEmpty, assembled + prefix > budget { break }
+            kept.insert(component, at: 0)
+        }
+
+        let complete = kept.count == components.count
+        let prefix = complete ? (insideHome ? "~/" : (cleaned.hasPrefix("/") ? "/" : "")) : "…/"
+        return prefix + kept.joined(separator: "/")
+    }
+
+    private static func withoutTrailingSlash(_ path: String) -> String {
+        var value = path.trimmingCharacters(in: .whitespaces)
+        while value.count > 1, value.hasSuffix("/") { value.removeLast() }
+        return value
+    }
+}
+
 enum DirectorySeed {
     /// Cold start: the daemon can only rank directories it has seen, and every
     /// imported shell history entry carries no directory at all. So on a fresh
