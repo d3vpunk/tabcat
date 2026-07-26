@@ -40,6 +40,15 @@ struct OverlayContent: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            // Everything inside the panel where nothing is drawn. The panel swallows
+            // every click in its frame whether or not something is there (Spike 1), so
+            // these clicks used to land nowhere at all — they now mean what a click
+            // beside a launcher means everywhere else on this system. Bottom of the
+            // stack, so the launcher and every card take their own clicks first.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { model.onDismiss?() }
+
             if model.launcherVisible {
                 PromptView(model: model)
                     // Fixed box, content pinned to its top edge: the confirmation

@@ -67,9 +67,18 @@ final class Controller {
         // something that already ended has nothing left to say — unlike the automatic
         // cleanup, which spares failures on purpose. What is still running stays in
         // the corner.
-        panel.onCancel = { [weak self] in
-            guard let self else { return }
-            self.model.dismissFinished()
+        panel.onCancel = { [weak self] in self?.dismiss() }
+        // A click on the panel where nothing is drawn. Same intent as Escape with an
+        // empty prompt and nothing in front, so it is the same code — one definition of
+        // "away" rather than two that drift.
+        model.onDismiss = { [weak self] in self?.dismiss() }
+        // Focus taken by something else. Not the same as Escape: Escape is a decision,
+        // this can be a notification or an application raising a window on its own, so
+        // it gives up the keyboard and the launcher WITHOUT dropping finished badges.
+        // Losing a run's output to an accident nobody asked for would be the worse
+        // trade by far.
+        panel.onFocusLost = { [weak self] in
+            guard let self, self.model.launcherVisible else { return }
             self.hideLauncher()
         }
         // A badge brought back to the front needs the launcher back too: the card is
@@ -132,6 +141,17 @@ final class Controller {
         // The hotkey is a chord, so its modifiers are down right now — unless the user
         // got here some other way, in which case there is nothing to cycle.
         cycling = NSEvent.modifierFlags.isSuperset(of: combo.held)
+    }
+
+    /// The whole overlay, put away deliberately.
+    ///
+    /// Finished runs go with it. Away means away with all of it, and a badge for
+    /// something that already ended has nothing left to say — unlike the automatic
+    /// cleanup, which spares failures on purpose. What is still running stays in the
+    /// corner, because that is the entire reason the rail outlives the launcher.
+    private func dismiss() {
+        model.dismissFinished()
+        hideLauncher()
     }
 
     private func hideLauncher() {

@@ -88,7 +88,8 @@ false alarm on `npm test` trains you to confirm without reading.
 | ⌥Space | show the overlay; press again with ⌥ still held to walk the chip row |
 | ⌥→ / ⌥← | walk the chip row while ⌥ is held |
 | release ⌥ | commit the directory, caret is already in the field |
-| Escape | drop a held-back command, else clear the line, else hide the overlay and every finished badge with it |
+| Escape | one rung at a time: drop a held-back command, else clear the line, else send the card in front to the rail, else hide the overlay and every finished badge with it |
+| click beside a card | the same as that last rung |
 | ⌘1…⌘5 | jump straight to a chip |
 | ↑ / ↓ | move through the candidate list |
 | Tab | accept the selected candidate, or step to the next one when it is already complete |

@@ -33,6 +33,9 @@ final class OverlayPanel: NSPanel {
     /// Escape, when nothing in the content claimed it.
     var onCancel: (() -> Void)?
 
+    /// The panel stopped being the key window while it was still on screen.
+    var onFocusLost: (() -> Void)?
+
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
@@ -63,5 +66,54 @@ final class OverlayPanel: NSPanel {
     /// own.
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
+    }
+
+    /// The keyboard went somewhere else — another application, Spotlight, a dialog.
+    ///
+    /// The overlay holds the keyboard without being the active application, so nothing
+    /// else takes it away by accident: as long as it is up it has focus, and losing
+    /// focus therefore means it should not be up. Measured rather than assumed —
+    /// activating another application does resign key on a `.nonactivatingPanel`, while
+    /// leaving it visible, so the flag and the window would otherwise drift apart.
+    ///
+    /// Handed up for the same reason as `cancelOperation`.
+    override func resignKey() {
+        super.resignKey()
+        onFocusLost?()
+    }
+
+    /// The prompt keeps the keyboard for as long as it is on screen.
+    ///
+    /// A click on a run card makes SwiftTerm's view first responder, and that view
+    /// forwards keystrokes into the pty — which is a feature that does not exist yet
+    /// (`PLAN-gui-rehaul.md`, phase 4) and today only means the next thing typed
+    /// disappears into a running command instead of appearing at the prompt. The click
+    /// is delivered first and the prompt takes the keyboard back afterwards, so
+    /// bringing a card to the front still works.
+    ///
+    /// Keyed on the field existing rather than on a flag: `PromptView` is only in the
+    /// hierarchy while the launcher is up, so with the rail alone there is nothing to
+    /// restore and nothing to guard against.
+    override func sendEvent(_ event: NSEvent) {
+        super.sendEvent(event)
+        // Left button only. A right click can open a context menu, which runs its own
+        // event loop, and taking the keyboard back from underneath it is not this
+        // method's business.
+        guard event.type == .leftMouseUp else { return }
+        guard let field = contentView?.firstDescendant(of: GhostTextView.self) else { return }
+        if firstResponder !== field { makeFirstResponder(field) }
+    }
+}
+
+extension NSView {
+    /// First view of this kind anywhere below, breadth first.
+    func firstDescendant<V: NSView>(of kind: V.Type) -> V? {
+        var queue = subviews
+        while !queue.isEmpty {
+            let view = queue.removeFirst()
+            if let match = view as? V { return match }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
     }
 }

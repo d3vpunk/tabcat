@@ -157,18 +157,25 @@ struct PromptView: View {
         case .down:
             return model.moveSelection(by: 1)
         case .cancel:
-            // One job at a time, most urgent to undo first: drop a held-back command,
-            // then clear the line. With nothing left to take back, the key is NOT
-            // claimed — `cancelOperation:` then travels up the responder chain to the
-            // panel, which hides the overlay. Escape closing a launcher is the one
-            // convention on this system every user already has, and until now nothing
-            // but the hotkey could put the overlay away.
+            // One rung at a time, and the order is what makes it predictable: drop a
+            // held-back command, free the prompt line, put the card in front away, and
+            // only with nothing left to tidy does Escape mean the whole overlay.
+            //
+            // The last rung is NOT claimed here — `cancelOperation:` travels up the
+            // responder chain to the panel, so the window and the flag cannot disagree
+            // about whether the overlay is up.
             if model.pending != nil {
                 model.discardPending()
                 return true
             }
             if !model.typed.isEmpty {
                 model.clear()
+                return true
+            }
+            // The card goes to the rail rather than away: minimising is not closing,
+            // and its output comes back with the badge. It is also the same thing ⌘↓
+            // does, so Escape cannot end up meaning something ⌘↓ does not.
+            if model.minimizeForeground() {
                 return true
             }
             return false

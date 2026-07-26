@@ -129,6 +129,14 @@ final class PromptModel: ObservableObject {
     /// focus out of whatever the user was typing in.
     var onReveal: (() -> Void)?
 
+    /// Asks for the overlay to go away. Set by the Controller for the same reason as
+    /// `onReveal`: the window is not the model's to order around.
+    ///
+    /// Raised by a click on the panel where nothing is drawn — which is a click beside
+    /// the overlay as far as the user is concerned, and everywhere else on this system
+    /// that dismisses.
+    var onDismiss: (() -> Void)?
+
     private var client: DaemonClient?
     /// Whether anything has placed the prompt yet. The top-ranked directory takes
     /// over on the first load and never again — a refresh runs on every open, and it
@@ -656,9 +664,15 @@ final class PromptModel: ObservableObject {
 
     /// Sends the run in front to the rail. This is the gesture the whole overlay was
     /// designed around: the output does not matter right now, put it away.
-    func minimizeForeground() {
-        guard foregroundID != nil else { return }
+    ///
+    /// Reports whether there was anything to put away, so Escape can use it as a rung:
+    /// a card in front is put away first, and only an Escape with nothing left to
+    /// tidy means the whole overlay.
+    @discardableResult
+    func minimizeForeground() -> Bool {
+        guard foregroundID != nil else { return false }
         foregroundID = nil
+        return true
     }
 
     /// Brings a badge back to the front, and the current front to the rail.

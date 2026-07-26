@@ -330,12 +330,39 @@ Ablage, Persistenz, Suche, Re-Run, Copy, „in Terminal öffnen", nachträgliche
 Benennen. Keystrokes in die pty routen (termios regelt Echo, `sudo` verhält sich
 wie im Terminal). Laufzeit auf der Card.
 
-### Phase 5 — Launcher-Flow
+### Phase 5 — Launcher-Flow (Wegschicken ✅, Rest offen)
 
-Escape schliesst als letzte Stufe. Klick nach aussen schliesst. Freier Pfad neben
-den Chips. `status` aufgeteilt: Fehler laut und eigenständig, „ready" unsichtbar
-(`PromptModel.swift:116` überschreibt heute Fehler damit). Kontextsensitive
-Tastenlegende. Verzeichnisauswahl übersteht das Wiederöffnen.
+**Erledigt am 2026-07-26: eine Leiter fürs Wegschicken, drei Wege hinein.**
+
+Escape nimmt eine Sprosse pro Druck, und die Reihenfolge ist die Vorgabe: erst das
+zurückgehaltene Kommando, dann die Prompt-Zeile frei, dann die Card in front in die
+Rail, und erst mit nichts mehr zum Aufräumen meint Escape das ganze Overlay. Die
+dritte Sprosse ist neu und ist bewusst dasselbe wie ⌘↓ — minimieren ist nicht
+schliessen, das Badge holt die Ausgabe zurück.
+
+Ein Klick auf das Panel, wo nichts gezeichnet ist, ist dieselbe Absicht wie die
+letzte Sprosse und ist derselbe Code. Das war vorher gar nichts: das Panel
+verschluckt jeden Klick in seinem Frame, gezeichnet oder nicht (Spike 1), also
+landeten diese Klicks nirgends.
+
+Focus-Verlust ist der dritte Weg, aber **nicht** derselbe: Escape und der Klick sind
+Entscheidungen, ein Focus-Verlust kann eine Benachrichtigung oder eine App sein, die
+sich selbst nach vorn holt. Er gibt Tastatur und Launcher her, wirft aber keine
+fertigen Badges weg. Damit gilt: solange das Overlay steht, hat es den Focus — denn
+den Focus zu verlieren heisst, nicht mehr zu stehen. Gemessen statt angenommen, ein
+`.nonactivatingPanel` verliert beim Aktivieren einer anderen App wirklich `key` und
+bleibt dabei sichtbar.
+
+Dazu die Regel, dass der Prompt die Tastatur behält: ein Klick auf eine Run-Card
+machte SwiftTerms View zum First Responder, und der schickt Tastendrücke in die pty
+— ein Feature aus Phase 4, das es noch nicht gibt und das heute nur heisst, dass das
+Nächstgetippte in einem laufenden Kommando verschwindet. Der Klick wird zuerst
+ausgeliefert, danach holt sich das Feld die Tastatur zurück.
+
+**Offen:** Freier Pfad neben den Chips. `status` aufgeteilt: Fehler laut und
+eigenständig, „ready" unsichtbar (`PromptModel.swift:116` überschreibt heute Fehler
+damit). Kontextsensitive Tastenlegende. Verzeichnisauswahl übersteht das
+Wiederöffnen.
 
 ### Phase 6 — Testtarget
 
