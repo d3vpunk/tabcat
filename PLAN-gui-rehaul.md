@@ -223,6 +223,34 @@ sagen, dass sie geschnitten wurde. Sechs Zeilen sichtbar, echter ScrollView stat
 des REPL-Schiebefensters (Rad und Trackpad gratis, Auswahl wird hineingescrollt),
 Zähler ab der siebten.
 
+**Nachgezogen nach einem Screenshot vom Laptop: die Run-Card lag auf der
+Kandidatenliste.** Nicht zu wenig Platz, sondern die falsche Bezugskante. Der
+Launcher hing 170 pt über der Mitte, also war seine Unterkante auf jedem Schirm
+gleich tief; auf 907 pt sichtbarer Höhe blieben darunter 344 pt für eine Card, die
+260 hoch sein wollte und ihre Sollposition per `max(minY + margin, …)` nach oben
+verschoben bekam — 40 pt in das Glas hinein. Der Clamp verschob, statt zu
+schrumpfen, und das war so kommentiert.
+
+Vier Änderungen, eine Regel: was passen muss, liegt **unter** dem Prompt, also
+wird von oben gemessen.
+
+- Oberkante ein Drittel von oben, und höher, wenn ein Drittel nicht reicht — der
+  Stapel endet am unteren Rand statt dahinter.
+- `launcherSize` gibt Höhe ab, damit `minimumCardHeight` (140) darunter frei
+  bleibt. Auf 1024×600 ist die Box deshalb 398 statt 440.
+- `card(below:)` schrumpft auf das, was übrig ist, statt zu schieben. Und misst
+  ungeklemmt: die Klemmung auf die Boxhöhe hiess, dass ein Glas, das über seine
+  eigene Box wächst (Confirm-Card), die Card nicht weiterschiebt, sondern sie
+  überlappt.
+- `panelOpen` nimmt die ganze Fläche, in der eine Card landen kann, statt eines
+  Rechtecks für eine geratene Höhe. Das Frame ist damit unabhängig davon, wie hoch
+  SwiftUI das Glas gerechnet hat.
+
+Die Tabelle in `--check` hat den Fall nicht gehabt: sie prüfte „auf dem Schirm"
+und „im Panel", nie „nicht auf dem Launcher". Jetzt sechs Schirme statt vier
+(dazu der Laptop als `visibleFrame`, also ohne Menüleiste, und ein Portraitschirm)
+und die Überlappung gegen fünf Glashöhen von 240 bis Box + 60.
+
 **Offen:** `search` (History) und `cwds` in dieselbe Liste, sektioniert; die
 Detailspalte rechts. Erst damit fallen ^R und der History-Modus endgültig weg.
 

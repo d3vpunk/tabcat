@@ -285,15 +285,23 @@ enum Check {
     ///
     /// Pinned because geometry fails silently and only on someone else's hardware:
     /// unplug an external display and everything is suddenly positioned for a screen
-    /// that no longer exists. Two invariants matter — nothing may leave the visible
-    /// area, and everything drawn must be inside the panel, because a panel clips
-    /// and that is how a card brought back from the rail became invisible.
+    /// that no longer exists. Three invariants matter — nothing may leave the visible
+    /// area, everything drawn must be inside the panel because a panel clips, and the
+    /// run card may not land on the launcher, which is what a laptop screen used to do
+    /// and what a screenshot rather than this table had to catch.
     private static func layout() -> Bool {
         let screens: [(name: String, rect: NSRect)] = [
             ("external 2560×1415", NSRect(x: 0, y: 0, width: 2560, height: 1415)),
             ("laptop 1512×944", NSRect(x: 0, y: 0, width: 1512, height: 944)),
+            // What a laptop actually offers: `visibleFrame`, so without the menu bar and
+            // with the Dock. This is the screen the overlap was reported on, and the full
+            // frame above is 37 pt more forgiving than anything real.
+            ("laptop visible 1512×860", NSRect(x: 0, y: 84, width: 1512, height: 860)),
             ("left of the main one", NSRect(x: -1920, y: 300, width: 1920, height: 1055)),
             ("short 1024×600", NSRect(x: 0, y: 0, width: 1024, height: 600)),
+            // Portrait, because a third of the way down is a very different place here
+            // and the stack must still be one stack rather than drift apart.
+            ("portrait 1440×2560", NSRect(x: 0, y: 0, width: 1440, height: 2560)),
         ]
 
         var wrong: [String] = []
@@ -315,6 +323,29 @@ enum Check {
             check(open.contains(launcher), "launcher is outside the open panel")
             check(open.contains(card), "card is outside the open panel — it would be clipped")
             check(closed.contains(layout.badge(0)), "badge is outside the closed panel")
+
+            // The card gets its reserved height in the worst case the layout plans for:
+            // a glass as tall as its own box. `launcherSize` gives up height for this, so
+            // a screen too short for both makes the card smaller instead of moving it.
+            check(card.height >= Layout.minimumCardHeight,
+                  "card is only \(Int(card.height)) pt tall, less than the reserved \(Int(Layout.minimumCardHeight))")
+
+            // The overlap itself, over the range of glass heights that actually occur:
+            // the glass hugs its content, so it is usually well short of its box, and it
+            // passes the box when a confirmation card appears. A card is placed under
+            // whatever the glass measured — never on top of it, and never off the screen.
+            // A fixed distance above the middle used to satisfy neither on a laptop.
+            for measured in [240.0, 320.0, 400.0, layout.launcherSize.height, layout.launcherSize.height + 60] {
+                let glassTop = launcher.maxY
+                let glassBottom = glassTop - measured
+                let placed = layout.card(below: measured)
+                check(placed.maxY <= glassBottom + 0.5,
+                      "card at glass \(Int(measured)) reaches \(Int(placed.maxY)), into the glass at \(Int(glassBottom))")
+                check(probe.rect.contains(placed) || placed.height == 0,
+                      "card at glass \(Int(measured)) leaves the screen: \(placed)")
+                check(open.contains(placed) || placed.height == 0,
+                      "card at glass \(Int(measured)) is outside the open panel")
+            }
 
             // Past the reserved capacity, which is the entire reason `rail(badges:)`
             // takes a count: the rail grows rather than a run being dropped to keep it

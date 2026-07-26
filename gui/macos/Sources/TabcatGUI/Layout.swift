@@ -19,14 +19,24 @@ struct Layout: Equatable {
     /// a bug you only meet on the laptop.
     static let preferredLauncherSize = CGSize(width: 800, height: 440)
     static let preferredCardHeight: CGFloat = 260
+    /// The smallest card worth drawing, and the room the launcher gives up for it.
+    ///
+    /// Reserved rather than hoped for: the launcher used to take its full height and
+    /// the card was pushed back up off the bottom edge into the prompt, which on a
+    /// laptop meant the run card overlapped the candidate list. Whoever is short of
+    /// room now loses height, not position.
+    static let minimumCardHeight: CGFloat = 140
+    /// Below this the launcher stops giving room away — a prompt squeezed to nothing
+    /// helps nobody. Reached only on a screen shorter than about 375 pt of usable
+    /// height, which is smaller than the overlay is meant for; there the two boxes
+    /// overlap again, and honestly so.
+    static let minimumLauncherHeight: CGFloat = 240
     static let badgeSize = CGSize(width: 300, height: 56)
     static let badgeGap: CGFloat = 10
     /// The rail is sized for at least this many badges whether they are there or
     /// not, so badges appearing and disappearing within that range never needs a
     /// reframe. A floor and not a cap: a run is never dropped to keep the rail short.
     static let railCapacity = 4
-    /// How far the launcher's top edge sits above the middle, when there is room.
-    private static let launcherRise: CGFloat = 170
     private static let cardGap: CGFloat = 14
 
     let screen: NSRect
@@ -50,28 +60,52 @@ struct Layout: Equatable {
 
     // MARK: - Sizes, fitted to this screen
 
+    /// The vertical room the overlay may use at all.
+    private var usable: CGFloat { screen.height - 2 * Self.margin }
+
     var launcherSize: CGSize {
-        CGSize(
+        // Height is capped twice: by what looks right, and by what still leaves the
+        // smallest useful card underneath. The second cap is the one that makes a short
+        // screen work — the box gives up height so the card keeps its place.
+        let sharing = max(Self.minimumLauncherHeight, usable - Self.cardGap - Self.minimumCardHeight)
+        return CGSize(
             width: min(Self.preferredLauncherSize.width, screen.width - 2 * Self.margin),
-            height: min(Self.preferredLauncherSize.height, screen.height - 2 * Self.margin)
+            height: min(Self.preferredLauncherSize.height, usable, sharing)
         )
+    }
+
+    /// The height the card is planned with: the rest of the usable height, between the
+    /// smallest one worth drawing and the one that looks right.
+    ///
+    /// Only a plan — `card(below:)` works from the launcher's *measured* glass, which is
+    /// usually shorter than its box and therefore leaves more room than this. It exists
+    /// so the launcher can be placed knowing how much has to fit below it.
+    private var plannedCardHeight: CGFloat {
+        max(Self.minimumCardHeight, min(Self.preferredCardHeight, usable - launcherSize.height - Self.cardGap))
     }
 
     // MARK: - Positions
 
-    /// Chips and prompt, centred, its TOP edge above the middle so the foreground
-    /// card has room underneath.
+    /// Chips and prompt, centred, its TOP edge a third of the way down the screen.
     ///
     /// Anchored by the top and not by the bottom: the content hangs from the top
     /// edge, so that is the edge that has to stay put when the box grows to hold a
-    /// longer candidate list. Kept inside the visible area, which after an external
-    /// display goes away is a good deal smaller.
+    /// longer candidate list.
+    ///
+    /// A third down rather than a fixed distance above the middle, because the middle is
+    /// the wrong reference — what has to fit is everything BELOW the prompt, and that is
+    /// measured from the top. The old rule put the launcher's bottom 170 pt above centre
+    /// on every screen alike, which on a laptop left less room underneath than a card
+    /// needs. Pushed higher still when even a third down does not leave room, so the
+    /// stack ends at the bottom margin instead of running past it.
     var launcher: NSRect {
         let size = launcherSize
-        let top = min(screen.midY + Self.launcherRise, screen.maxY - Self.margin)
+        let stack = size.height + Self.cardGap + plannedCardHeight
+        let aThirdDown = screen.minY + screen.height * 2 / 3
+        let top = min(screen.maxY - Self.margin, max(aThirdDown, screen.minY + Self.margin + stack))
         return NSRect(
             x: screen.midX - size.width / 2,
-            y: max(screen.minY + Self.margin, top - size.height),
+            y: top - size.height,
             width: size.width,
             height: size.height
         )
@@ -83,18 +117,40 @@ struct Layout: Equatable {
     /// hugs its content and sits at the box's top edge — going by the box would leave
     /// the difference as a gap.
     ///
-    /// Pushed back up rather than allowed off the bottom edge. On a screen too short
-    /// for both it ends up overlapping the launcher, which is worth having: a card
-    /// that overlaps can still be read, and one that hangs off the bottom cannot.
+    /// Shrinks to what is left rather than being pushed up: a shorter card is still a
+    /// readable card, while one shoved into the candidate list hides the list and reads
+    /// as a rendering bug. `launcherSize` reserves `minimumCardHeight` for exactly this,
+    /// so what is left only falls below that height when the glass grew past its own box
+    /// — a confirmation card on a short screen, and transient.
+    ///
+    /// The measured height is NOT clamped to the box. Clamping meant a glass taller than
+    /// its box stopped pushing the card down and started overlapping it instead.
     func card(below launcherHeight: CGFloat) -> NSRect {
         let size = launcherSize
-        let top = launcher.maxY - min(launcherHeight, size.height) - Self.cardGap
-        let height = min(Self.preferredCardHeight, screen.height - 2 * Self.margin)
+        let bottom = screen.minY + Self.margin
+        let top = launcher.maxY - launcherHeight - Self.cardGap
+        let height = max(0, min(Self.preferredCardHeight, top - bottom))
         return NSRect(
             x: screen.midX - size.width / 2,
-            y: max(screen.minY + Self.margin, top - height),
+            y: top - height,
             width: size.width,
             height: height
+        )
+    }
+
+    /// Every position the card can end up in, whatever the glass measured.
+    ///
+    /// The panel's frame comes from this rather than from one card rect: the card moves
+    /// with a glass whose height is only known after SwiftUI has laid it out, and a frame
+    /// computed for one height clipped the card at another.
+    private var cardArea: NSRect {
+        let size = launcherSize
+        let bottom = screen.minY + Self.margin
+        return NSRect(
+            x: screen.midX - size.width / 2,
+            y: bottom,
+            width: size.width,
+            height: max(0, launcher.minY - bottom)
         )
     }
 
@@ -128,12 +184,11 @@ struct Layout: Equatable {
     /// While the launcher is open: everything, so a card can animate from the middle
     /// to the corner without the frame changing under it mid-flight.
     ///
-    /// Computed for a FULL launcher, which puts the card at its lowest. A shorter
-    /// launcher moves the card up, so this stays a superset and the frame never has
-    /// to change just because the launcher grew a confirmation card.
+    /// The launcher's box plus the whole area a card can occupy, so the frame never has
+    /// to change just because the glass grew a confirmation card and moved the card down.
     func panelOpen(badges: Int) -> NSRect {
         launcher.insetBy(dx: -12, dy: -12)
-            .union(card(below: launcherSize.height).insetBy(dx: -12, dy: -12))
+            .union(cardArea.insetBy(dx: -12, dy: -12))
             .union(rail(badges: badges))
     }
 
