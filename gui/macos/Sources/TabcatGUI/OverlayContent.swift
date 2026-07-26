@@ -9,11 +9,13 @@ import SwiftUI
 /// animates; the VStack holds only the launcher.
 struct OverlayContent: View {
     @ObservedObject var model: PromptModel
-    let layout: Layout
 
     /// The panel's own frame. Changes when the launcher opens or closes, and the
     /// conversion below follows it in the same update so nothing moves visually.
     private var panelFrame: CGRect { model.panelFrame }
+    /// Read from the model, not held: it is recomputed for whichever screen the
+    /// overlay is opening on.
+    private var layout: Layout { model.layout }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -22,8 +24,8 @@ struct OverlayContent: View {
                     // Fixed box, content pinned to its top edge: the confirmation
                     // card grows downwards instead of shifting the prompt.
                     .frame(
-                        width: Layout.launcherSize.width,
-                        height: Layout.launcherSize.height,
+                        width: layout.launcherSize.width,
+                        height: layout.launcherSize.height,
                         alignment: .topLeading
                     )
                     .place(layout.launcher, in: panelFrame)
@@ -31,40 +33,49 @@ struct OverlayContent: View {
             }
 
             ForEach(model.runs) { run in
-                RunCard(run: run, compact: run.presentation == .badge)
-                    .frame(width: size(for: run).width, height: size(for: run).height, alignment: .topLeading)
-                    .place(rect(for: run), in: panelFrame)
-                    .onTapGesture { model.bringToFront(run) }
+                let rect = rect(for: run)
+                RunCard(
+                    run: run,
+                    compact: model.presentation(of: run) == .badge,
+                    onClose: { model.dismiss(run) }
+                )
+                // Size taken from the same rect as the position, so a card that had
+                // to shrink to fit the screen is also drawn at that size.
+                .frame(width: rect.width, height: rect.height, alignment: .topLeading)
+                .place(rect, in: panelFrame)
+                .onTapGesture { model.bringToFront(run) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // One spring for every card's position and size at once, which is what makes
         // a card look like it travelled rather than like it was replaced.
+        //
+        // Its settling time is what the Controller's shrink delay has to outlast: a
+        // panel that shrinks to the rail while a card is still flying towards it
+        // clips the card. Slower or less damped here means a longer wait there.
         .animation(.spring(response: 0.45, dampingFraction: 0.82), value: signature)
     }
 
     /// What the animation should react to: which run is where, and how many badges
     /// there are. Output changing must NOT restart it.
     private var signature: String {
-        model.runs.map { "\($0.id)\($0.presentation)" }.joined()
+        model.runs.map { "\($0.id)\(model.presentation(of: $0))" }.joined()
             + "\(model.launcherVisible)"
             // So a confirmation card appearing slides the run card down instead of
             // teleporting it.
             + "\(Int(model.launcherHeight))"
+        // Deliberately NOT the layout: a display that went away should reposition
+        // everything at once, not send the cards gliding across the new screen.
     }
 
     private func rect(for run: Run) -> CGRect {
-        guard run.presentation == .badge else {
+        guard model.presentation(of: run) == .badge else {
             // The last measured height survives the launcher being hidden, so the
             // card stays where it was instead of jumping when the launcher goes away.
             return layout.card(below: model.launcherHeight)
         }
         let index = model.badges.firstIndex { $0 === run } ?? 0
         return layout.badge(index)
-    }
-
-    private func size(for run: Run) -> CGSize {
-        run.presentation == .badge ? Layout.badgeSize : Layout.cardSize
     }
 }
 

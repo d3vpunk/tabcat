@@ -60,6 +60,39 @@ extension DaemonClient {
     }
 }
 
+/// The line after accepting `candidate`.
+///
+/// The candidate REPLACES the last `replace` code points rather than being appended
+/// to them. That is what lets `doc` become `Documents/` instead of `docDocuments/`,
+/// and what lets a magic handle become the command it stands for — neither of which
+/// a ghost can show, because a ghost is drawn after the caret and can only append.
+/// Accepting therefore cannot go through the ghost, which is exactly the mistake
+/// this replaces.
+///
+/// Mirrors `acceptedLine` in `src/daemon/server.ts` and `acceptedLineFor` in
+/// `src/repl/app.tsx`; all three have to agree or the badge in one front end
+/// promises what another does not deliver.
+///
+/// Code points, not UTF-16 units: that is the unit the daemon counts `replace` in,
+/// and a line containing an emoji would otherwise be cut in the wrong place.
+func acceptedLine(for candidate: Candidate, line: String, caret: Int) -> String {
+    guard !candidate.display.isEmpty else { return line }
+    let scalars = Array(line.unicodeScalars)
+    let cursor = min(max(0, caret), scalars.count)
+    let start = max(0, cursor - candidate.replace)
+    return String(String.UnicodeScalarView(scalars[0..<start]))
+        + candidate.display
+        + String(String.UnicodeScalarView(scalars[cursor...]))
+}
+
+/// Where the caret lands after accepting — right after what was inserted.
+func acceptedCaret(for candidate: Candidate, line: String, caret: Int) -> Int {
+    let scalars = Array(line.unicodeScalars)
+    let cursor = min(max(0, caret), scalars.count)
+    let start = max(0, cursor - candidate.replace)
+    return start + candidate.display.unicodeScalars.count
+}
+
 /// What to draw after the typed text, or "" for no ghost.
 ///
 /// Ported from `_tabcat_ghost_for_candidate` in the zsh plugin, and it has to be:

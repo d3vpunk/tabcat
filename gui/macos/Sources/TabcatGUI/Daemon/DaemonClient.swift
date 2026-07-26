@@ -14,7 +14,9 @@ actor DaemonClient {
     private var buffer = Data()
     private let socketPath: String
     private let timeout: TimeInterval
-    private let binary: String
+    /// Where `tabcat` is and what environment it needs — a bundled app cannot
+    /// assume either. See `ToolPath`.
+    private let tooling: Tooling
     /// Rate limit for respawning, so a `tabcat` that cannot start does not turn
     /// every keystroke into a process launch.
     private var lastSpawn: Date?
@@ -23,35 +25,27 @@ actor DaemonClient {
     /// deliberate: retrying would produce the same answer every keystroke.
     private(set) var disabledReason: String?
 
-    init(socketPath: String, timeout: TimeInterval = 0.15, binary: String = "tabcat") {
+    init(socketPath: String, timeout: TimeInterval = 0.15, tooling: Tooling) {
         self.socketPath = socketPath
         self.timeout = timeout
-        self.binary = binary
+        self.tooling = tooling
     }
 
-    /// Asks the CLI where the socket is instead of reimplementing the rule. It
-    /// already lives in `paths.ts` and, mirrored, in the zsh plugin — a third copy
-    /// would drift, and only on machines with a long home path or an NFS home.
-    static func resolveSocketPath(binary: String = "tabcat") throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [binary, "daemon", "path"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            throw ClientError.socketPathUnavailable("could not run `\(binary)`: \(error.localizedDescription)")
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw ClientError.socketPathUnavailable("`\(binary) daemon path` exited \(process.terminationStatus) — is tabcat new enough?")
-        }
-        let path = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty else {
-            throw ClientError.socketPathUnavailable("`\(binary) daemon path` printed nothing")
+    /// The socket the CLI named, rather than a rule reimplemented here. It already
+    /// lives in `paths.ts` and, mirrored, in the zsh plugin — a third copy would
+    /// drift, and only on machines with a long home path or an NFS home.
+    ///
+    /// `ToolPath` asked while it was establishing that `tabcat` runs at all, so this
+    /// is a lookup and not a process. It used to spawn one here: synchronously, with
+    /// no timeout, on the main thread — which a file that opens by promising a hung
+    /// daemon can never freeze typing has no business doing.
+    static func resolveSocketPath(tooling: Tooling) throws -> String {
+        guard let path = tooling.socketPath else {
+            // 127 is the shape the underlying failure takes when `tabcat` was found
+            // but `node` was not — the script's shebang, not the script.
+            throw ClientError.socketPathUnavailable(
+                "`\(tooling.binary) daemon path` gave no answer — is tabcat new enough, and is node on its PATH?"
+            )
         }
         return path
     }
@@ -124,7 +118,8 @@ actor DaemonClient {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [binary, "daemon", "--socket", socketPath]
+        process.arguments = [tooling.binary, "daemon", "--socket", socketPath]
+        process.environment = tooling.environment
         // The daemon has to outlive this app, and its output must not land in ours.
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

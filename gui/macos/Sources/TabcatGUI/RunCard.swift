@@ -20,6 +20,11 @@ struct TerminalPane: NSViewRepresentable {
 struct RunCard: View {
     @ObservedObject var run: Run
     let compact: Bool
+    /// Closes this run. Terminates it first when it is still going — which is why
+    /// the button says so rather than showing the same ✕ in both cases.
+    let onClose: () -> Void
+
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 0 : 8) {
@@ -34,6 +39,12 @@ struct RunCard: View {
         // of turning into a rectangle with rounded nubs. .continuous is the squircle;
         // the default .circular reads as a hard corner.
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: compact ? 18 : 22, style: .continuous))
+        // The whole card takes the click, not only the glyphs that happen to be drawn
+        // on it. Without this a tap landed only on the status dot and the command
+        // text — padding, the spacer and the glass itself are not hit-testable, so
+        // most of a badge was a hole.
+        .contentShape(RoundedRectangle(cornerRadius: compact ? 18 : 22, style: .continuous))
+        .onHover { hovering = $0 }
     }
 
     private var header: some View {
@@ -45,11 +56,37 @@ struct RunCard: View {
                 .truncationMode(.tail)
             Spacer(minLength: 6)
             if case let .finished(code) = run.state, code != 0 {
-                Text("exit \(code)")
+                // Built as a String first, and not interpolated into the Text: `code`
+                // is optional, so the direct form rendered a failure as
+                // "exit Optional(1)" — and an unreported one as "exit nil", since
+                // `nil != 0` is true.
+                Text(code.map { "exit \($0)" } ?? "exit unknown")
                     .font(.system(size: 10))
                     .foregroundStyle(.red)
             }
+            closeButton
         }
+    }
+
+    /// The only way to get rid of a run by hand. Without it a failed badge stayed in
+    /// the rail for good: a tap brings it to the front, and nothing else was bound.
+    ///
+    /// Shown on hover rather than always, so a full rail does not read as a row of
+    /// buttons — but it occupies its space either way, so the header does not reflow
+    /// under the pointer.
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: run.state == .running ? "stop.fill" : "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .frame(width: 14, height: 14)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .opacity(hovering ? 1 : 0)
+        .allowsHitTesting(hovering)
+        .help(run.state == .running ? "stop and close" : "close")
+        .accessibilityLabel(run.state == .running ? "Stop and close run" : "Close run")
     }
 
     private var statusDot: some View {

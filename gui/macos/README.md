@@ -6,14 +6,41 @@ with a prompt and ghost text from the same engine, and the app you were working 
 stays frontmost.
 
 What works: the global hotkey, the overlay, the directory chip row, the prompt with
-live predictions, running commands in a pseudo terminal whose result is fed back to
-the daemon with `learn` — so overlay usage improves the same ranking the zsh plugin
-uses — and a rail of minimised runs in the bottom-right corner.
+live predictions and a ranked candidate list, running commands in a pseudo terminal
+whose result is fed back to the daemon with `learn` — so overlay usage improves the
+same ranking the zsh plugin uses — and a rail of minimised runs in the bottom-right
+corner.
+
+The list is shown on an empty line as well, where it is the frecency ranking for the
+current directory: what you usually do here, before you have typed anything. It also
+carries what a ghost cannot. A ghost is drawn after the caret and can only append, so
+a candidate that corrects the spelling (`doc` → `Documents/`) or a magic handle that
+expands to something else entirely has no ghost — and used to be invisible as well as
+unreachable. Accepting therefore applies the candidate, never the ghost.
+
+The ghost is drawn in two weights: its first chunk, which `→` takes, a step brighter
+than the rest, which `Tab` takes. It is the one place the difference between the two
+keys can be seen instead of discovered by pressing them. The prompt is an `NSTextView`
+the app owns rather than a `TextField`, so the ghost is placed by the same layout that
+drew the text — as a separate view offset by a measured width it drifted off the edge
+as soon as the line outgrew the field. Long lines wrap rather than scroll sideways,
+and a line break (⌥Enter, or a paste that contains one) is simply another line.
+
+Typing a magic handle and pressing Enter runs what it stands for, the way it does in
+the REPL and the plugin. A handle is a whole line or it is not a handle: `lint --fix`
+is a command that happens to start with one.
+
+A line that only changes directory does not become a run. `cd frontend`, or just
+`frontend`, moves the prompt instead — every run also reports the directory its shell
+ended in, so `cd x && make`, `z api` and anything defined in an rc file move it too,
+without having to be recognised.
 
 Several commands can be in flight at once. Starting one sends the previous card to
 the rail rather than replacing it; ⌘↓ sends the front card away by hand, a click
 brings a badge back. A clean run clears itself from the rail after a few seconds; a
-failed one stays, because an error nobody saw is the same as no error at all.
+failed one stays, because an error nobody saw is the same as no error at all — but
+Escape clears both, since by then the user is looking at them and saying away.
+Anything still running is never removed on its own; only its own ✕ ends it.
 
 Not built yet:
 
@@ -61,12 +88,42 @@ false alarm on `npm test` trains you to confirm without reading.
 | ⌥Space | show the overlay; press again with ⌥ still held to walk the chip row |
 | ⌥→ / ⌥← | walk the chip row while ⌥ is held |
 | release ⌥ | commit the directory, caret is already in the field |
+| Escape | drop a held-back command, else clear the line, else hide the overlay and every finished badge with it |
 | ⌘1…⌘5 | jump straight to a chip |
-| Tab or → | accept the ghost |
-| Enter | run the line |
+| ↑ / ↓ | move through the candidate list |
+| Tab | accept the selected candidate, or step to the next one when it is already complete |
+| → | accept one chunk, at the end of the line and where a ghost is shown |
+| ⇧Tab | undo the last accept |
+| Enter | on a row reached with ↑/↓: fill the line. Otherwise: run it |
+| ⌥Enter | a line break — a command may span lines, and no mode is involved |
+| click a row | same as Enter on it — fill the line, do not run |
 | ⌘Enter | confirm a command that was held back |
 | ⌘↓ | send the front card to the rail |
-| click a badge | bring it back to the front |
+| click a badge | bring it back to the front, launcher and all |
+| hover a card | reveals its close button — ✕, or stop when it is still running |
+| click a breadcrumb | go to that directory |
+
+The overlay's own key is configurable, because which combination is free is a
+property of a machine and not of this program — ⌥Space is what Alfred and Raycast
+take by default, and a launcher whose trigger is already owned opens two windows.
+
+```sh
+defaults write nl.d3vpunk.tabcat.gui hotkey "ctrl cmd s"   # the bundled app
+TABCAT_HOTKEY="ctrl cmd s" swift run TabcatGUI             # a development run
+```
+
+Both exist because neither reaches the other: an app started from the Finder inherits
+no environment, and a bare `swift run` has a different defaults domain than the
+bundle. `--check` prints whichever one is in force.
+
+Words in any order, one non-modifier key: `cmd`, `ctrl`, `opt`/`alt`, `shift`, plus
+`space`, `escape`, `return`, `tab`, a letter or a digit. Anything unparseable falls
+back to ⌥Space rather than leaving no way in at all.
+
+Whatever the combination is, its modifiers are the hold-to-cycle chord: the table
+above says ⌥ because that is the default, but with `ctrl cmd s` it is ⌃⌘ that is held
+and `s` that steps to the next directory. Two neighbours to avoid: **⌃⌘Space is the
+Emoji picker** and ⌃Space switches input sources.
 | Escape | drop a held-back command, else clear the line, else put the front card away |
 
 The ⌥Space double meaning is deliberate and is why `Controller` tracks whether ⌥
