@@ -29,6 +29,11 @@ final class Run: ObservableObject, Identifiable {
     let id = UUID()
     /// What actually runs — after handle expansion, not what was typed.
     let command: String
+    /// The magic name this command has here, or "".
+    ///
+    /// Resolved once at submit time and carried, not looked up by the view: a `body`
+    /// runs on every keystroke and this answer comes from the daemon.
+    let handle: String
     let cwd: String
     let startedAt = Date()
 
@@ -54,9 +59,10 @@ final class Run: ObservableObject, Identifiable {
 
     private var delegateBox: ProcessDelegate?
 
-    init(command: String, cwd: String) {
+    init(command: String, cwd: String, handle: String = "") {
         self.command = command
         self.cwd = cwd
+        self.handle = handle
     }
 
     /// - Parameter onFinish: called with the exit code once the child is gone, so the

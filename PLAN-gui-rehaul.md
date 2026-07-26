@@ -317,12 +317,31 @@ Layoutquelle, sonst driftet der Ghost bei langen Zeilen. Dann:
 - mehrzeilige Eingabe ohne Modus
 - ^W/^U/⌥⌫ ergänzen, was AppKit nicht geschenkt gibt
 
-### Phase 3 — Handles
+### Phase 3 — Handles (Badge ✅, Rest offen)
 
-⌘N als Popover, ⌘⌫ zum Vergessen, beides über `names create`/`delete`. Magic-
-Kandidaten als echte Listenzeile mit ⚡. Die `@handle`-Syntax
-(`PromptModel.swift:330`) fliegt raus — sie existiert nur, weil der normale Pfad
-kaputt ist.
+**Erledigt am 2026-07-26: das minimierte Badge zeigt den Handle.** Ein Badge ist
+300 pt breit, also endet alles über ~40 Zeichen im Ellipsis — und bei
+`docker compose -f qlico/docker-compose.yaml run php vendor/bin/…` bleibt genau der
+Teil stehen, den jeder dieser Runs gemeinsam hat. Der Handle ist der Name, den der
+User dem Ding gegeben hat, weil er die kurze Art ist zu sagen welches es ist.
+
+Zwei Wege zu einem Handle, beide beim Absenden bezahlt, keiner auf dem Tippweg: die
+getippte Zeile **war** der Handle (die Expansion ist der Beweis), oder sie wurde
+ausgeschrieben und der Daemon hat trotzdem einen Namen dafür — Rückwärtssuche über
+`names list`. Gemessen gegen den laufenden Daemon: `"npm publish"` → `publish`.
+
+Dabei gefangen, bevor es lief: `names` ist auf der Leitung ein festes Siebenfeld
+(`protocol.ts`, FIELD_COUNT), ein `["list", cwd]` quittiert der Daemon mit
+`bad_fields: names expects 7 fields, got 5` — und die Methode hätte das als „kein
+Handle" verschluckt. Das Feature wäre still tot gewesen.
+
+Die Card in front zeigt weiter das Kommando: dort ist Platz, und das Terminal
+darunter zeigt die Ausgabe genau dieses Kommandos.
+
+**Offen:** ⌘N als Popover, ⌘⌫ zum Vergessen, beides über `names create`/`delete`.
+Magic-Kandidaten als echte Listenzeile mit ⚡ (steht, seit Phase 0d). Ein Badge
+erfährt heute nichts davon, wenn der Handle erst nach dem Start angelegt wird — mit
+⌘N wird das sichtbar und ist dann fällig.
 
 ### Phase 4 — Runs als Objekte
 

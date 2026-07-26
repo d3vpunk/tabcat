@@ -119,6 +119,9 @@ final class PromptModel: ObservableObject {
         let command: String
         let cwd: String
         let hazards: [Hazard]
+        /// Carried through the confirmation so the badge can show it afterwards. Looked
+        /// up once, when the command was submitted, rather than again on confirming.
+        let handle: String
     }
 
     /// Asks for the launcher back. Set by the Controller, which owns the window.
@@ -563,12 +566,15 @@ final class PromptModel: ObservableObject {
         Task { [line, cwd] in
             // Scanned AFTER handle expansion: `@deploy` says nothing about what it
             // does, and the expansion is what actually runs.
-            let command = await resolved(line)
+            let resolution = await resolved(line, cwd: cwd)
+            let command = resolution.command
             let hazards = HazardScan.scan(command: command, cwd: cwd)
             if hazards.isEmpty {
-                start(command: command, cwd: cwd)
+                start(command: command, cwd: cwd, handle: resolution.handle)
             } else {
-                pending = PendingRun(command: command, cwd: cwd, hazards: hazards)
+                pending = PendingRun(
+                    command: command, cwd: cwd, hazards: hazards, handle: resolution.handle
+                )
                 status = "⌘Enter to run it, Escape to drop it"
             }
         }
@@ -580,7 +586,7 @@ final class PromptModel: ObservableObject {
     func confirmPending() {
         guard let pending else { return }
         self.pending = nil
-        start(command: pending.command, cwd: pending.cwd)
+        start(command: pending.command, cwd: pending.cwd, handle: pending.handle)
     }
 
     func discardPending() {
@@ -589,12 +595,12 @@ final class PromptModel: ObservableObject {
         status = "dropped"
     }
 
-    private func start(command: String, cwd: String) {
+    private func start(command: String, cwd: String, handle: String = "") {
         // Whatever was in front moves to the rail rather than being replaced. The
         // previous version refused a second command outright, which for a launcher
         // built around quick one-offs meant waiting out `npm test` doing nothing.
         // Nothing has to be demoted: exactly one id is in front, by construction.
-        let run = Run(command: command, cwd: cwd)
+        let run = Run(command: command, cwd: cwd, handle: handle)
         runs.insert(run, at: 0)
         foregroundID = run.id
         // Oldest first out of the rail, but only what has already finished. The
@@ -716,16 +722,57 @@ final class PromptModel: ObservableObject {
     /// A whole line or nothing: `lint --fix` is a command that happens to start with
     /// a word that is also a handle, and expanding it would splice the arguments onto
     /// something else entirely.
-    private func resolved(_ line: String) async -> String {
+    ///
+    /// Returns the handle alongside the command, because the badge in the rail wants it
+    /// and this is where it is known for free. Two ways to arrive at one:
+    ///
+    /// - the line WAS the handle, and expanding it is the proof
+    /// - the line was typed out in full and the daemon happens to have a name for it
+    ///
+    /// The second is a reverse lookup, so it costs one more round trip — paid on Enter,
+    /// which is the one keystroke that already waits for the daemon, and never on the
+    /// typing path.
+    private func resolved(_ line: String, cwd: String) async -> (command: String, handle: String) {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard let client, !trimmed.isEmpty, !trimmed.contains(" ") else { return line }
-        do {
-            let rows = try await client.request(op: "names", fields: ["resolve", cwd, trimmed, ""])
-            let expansion = rows[0].count > 2 ? rows[0][2] : ""
-            return expansion.isEmpty ? line : expansion
-        } catch {
-            return line
+        guard let client, !trimmed.isEmpty else { return (line, "") }
+
+        if !trimmed.contains(" ") {
+            do {
+                let rows = try await client.request(op: "names", fields: ["resolve", cwd, trimmed, ""])
+                let expansion = rows[0].count > 2 ? rows[0][2] : ""
+                if !expansion.isEmpty { return (expansion, trimmed) }
+            } catch {
+                return (line, "")
+            }
         }
+        return (line, await handle(for: line, cwd: cwd, client: client))
+    }
+
+    /// What the daemon calls this command here, or "" if it has no name for it.
+    ///
+    /// Asked rather than remembered: names are created from the REPL and the plugin too,
+    /// and a handle added there should show up on the next run without the overlay
+    /// having been restarted. Compared on the whole line, the same way `names create`
+    /// stores it — a name stands for a command, not for a prefix of one.
+    ///
+    /// `names list` is sorted by handle, so two handles for the same command resolve to
+    /// the first alphabetically. Deterministic beats picking whichever came back first.
+    private func handle(for command: String, cwd: String, client: DaemonClient) async -> String {
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return "" }
+        do {
+            // Four fields, padded: `names` is a fixed seven on the wire counting op, id
+            // and protocol (`protocol.ts`, FIELD_COUNT), and a short line comes back
+            // `bad_fields` — which this method would have swallowed into "no handle".
+            let rows = try await client.request(op: "names", fields: ["list", cwd, "", ""])
+            // Row 0 is the header; the rest is handle, line.
+            for row in rows.dropFirst() where row.count > 1 && row[1] == trimmed {
+                return row[0]
+            }
+        } catch {
+            return ""
+        }
+        return ""
     }
 
     /// Feeds the run back into the model the zsh plugin shares. Without this the

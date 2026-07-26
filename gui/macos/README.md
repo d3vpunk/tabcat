@@ -42,6 +42,14 @@ failed one stays, because an error nobody saw is the same as no error at all —
 Escape clears both, since by then the user is looking at them and saying away.
 Anything still running is never removed on its own; only its own ✕ ends it.
 
+A badge is 300 pt wide, so it shows its magic name where the command has one —
+`⚡sshfriday` rather than the first forty characters of an `ssh` line, which is the
+part every one of them has in common. Resolved when the command is submitted, from
+the same `names` the REPL and the plugin write to, and either way: the line typed
+*was* the handle, or the daemon happens to have a name for the line typed in full.
+The card in front keeps showing the command, since there is room for it and the
+terminal underneath is showing that command's output.
+
 Not built yet:
 
 - **typing into a running command.** The card shows a real terminal, so `vim` and a

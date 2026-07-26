@@ -50,7 +50,7 @@ struct RunCard: View {
     private var header: some View {
         HStack(spacing: 8) {
             statusDot
-            Text(run.command)
+            title
                 .font(Typeface.small(compact ? 11 : 12))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -65,6 +65,26 @@ struct RunCard: View {
                     .foregroundStyle(.red)
             }
             closeButton
+        }
+    }
+
+    /// The badge says what the command is called, the card in front says what it is.
+    ///
+    /// A badge is 300 pt wide, so anything longer than about forty characters ends in an
+    /// ellipsis — and `docker compose -f qlico/docker-compose.yaml run php vendor/bin/…`
+    /// truncates to the part every one of those runs has in common. Its handle is the
+    /// name the user gave it precisely because it is the short way to say which one it
+    /// is, so where there is one it wins the badge.
+    ///
+    /// In front it stays the command: there is room for it, the terminal underneath is
+    /// showing that command's output, and the expansion is what a handle is for.
+    /// ⚡ and purple are the same marks the candidate list uses for a handle.
+    @ViewBuilder private var title: some View {
+        if compact, !run.handle.isEmpty {
+            Text("⚡\(run.handle)")
+                .foregroundStyle(.purple)
+        } else {
+            Text(run.command)
         }
     }
 
