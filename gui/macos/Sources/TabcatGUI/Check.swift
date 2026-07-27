@@ -464,7 +464,7 @@ enum Check {
             ("laptop visible 1512×860", NSRect(x: 0, y: 84, width: 1512, height: 860)),
             ("left of the main one", NSRect(x: -1920, y: 300, width: 1920, height: 1055)),
             ("short 1024×600", NSRect(x: 0, y: 0, width: 1024, height: 600)),
-            // Portrait, because a third of the way down is a very different place here
+            // Portrait, because a quarter of the way down is a very different place here
             // and the stack must still be one stack rather than drift apart.
             ("portrait 1440×2560", NSRect(x: 0, y: 0, width: 1440, height: 2560)),
         ]

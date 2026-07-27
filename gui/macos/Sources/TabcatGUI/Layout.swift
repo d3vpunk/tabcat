@@ -17,8 +17,8 @@ struct Layout: Equatable {
     /// What the launcher asks for. What it gets is `launcherSize`, fitted to the
     /// screen it is actually on — a box wider than the display is not a layout, it is
     /// a bug you only meet on the laptop.
-    static let preferredLauncherSize = CGSize(width: 800, height: 440)
-    static let preferredCardHeight: CGFloat = 260
+    static let preferredLauncherSize = CGSize(width: 1200, height: 440)
+    static let preferredCardHeight: CGFloat = 400
     /// The smallest card worth drawing, and the room the launcher gives up for it.
     ///
     /// Reserved rather than hoped for: the launcher used to take its full height and
@@ -86,23 +86,23 @@ struct Layout: Equatable {
 
     // MARK: - Positions
 
-    /// Chips and prompt, centred, its TOP edge a third of the way down the screen.
+    /// Chips and prompt, centred, its TOP edge a quarter of the way down the screen.
     ///
     /// Anchored by the top and not by the bottom: the content hangs from the top
     /// edge, so that is the edge that has to stay put when the box grows to hold a
     /// longer candidate list.
     ///
-    /// A third down rather than a fixed distance above the middle, because the middle is
-    /// the wrong reference — what has to fit is everything BELOW the prompt, and that is
-    /// measured from the top. The old rule put the launcher's bottom 170 pt above centre
-    /// on every screen alike, which on a laptop left less room underneath than a card
-    /// needs. Pushed higher still when even a third down does not leave room, so the
-    /// stack ends at the bottom margin instead of running past it.
+    /// A quarter down rather than a fixed distance above the middle, because the middle
+    /// is the wrong reference — what has to fit is everything BELOW the prompt, and that
+    /// is measured from the top. The old rule put the launcher's bottom 170 pt above
+    /// centre on every screen alike, which on a laptop left less room underneath than a
+    /// card needs. Pushed higher still when even a quarter down does not leave room, so
+    /// the stack ends at the bottom margin instead of running past it.
     var launcher: NSRect {
         let size = launcherSize
         let stack = size.height + Self.cardGap + plannedCardHeight
-        let aThirdDown = screen.minY + screen.height * 2 / 3
-        let top = min(screen.maxY - Self.margin, max(aThirdDown, screen.minY + Self.margin + stack))
+        let aQuarterDown = screen.minY + screen.height * 3 / 4
+        let top = min(screen.maxY - Self.margin, max(aQuarterDown, screen.minY + Self.margin + stack))
         return NSRect(
             x: screen.midX - size.width / 2,
             y: top - size.height,

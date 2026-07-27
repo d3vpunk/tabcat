@@ -234,7 +234,7 @@ final class PromptModel: ObservableObject {
 
     /// The current directory as clickable components, home collapsed to `~`.
     ///
-    /// Capped: the launcher is 800 pt wide and a deep path would push the row past
+    /// Capped: the launcher is 1200 pt wide and a deep path would push the row past
     /// it. The leading `…` is clickable too and stands for one level above what is
     /// shown, which is where someone reaching for it wants to go anyway.
     var breadcrumb: [Crumb] {

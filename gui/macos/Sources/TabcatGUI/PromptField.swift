@@ -64,7 +64,7 @@ struct PromptField: NSViewRepresentable {
         view.drawsBackground = false
         view.textContainerInset = .zero
         view.textContainer?.lineFragmentPadding = 0
-        // Wrap rather than scroll sideways. On an 800 pt panel the whole command
+        // Wrap rather than scroll sideways. On a 1200 pt panel the whole command
         // stays readable, and a wrapped line is the same thing multi-line input
         // needs anyway.
         view.textContainer?.widthTracksTextView = true
