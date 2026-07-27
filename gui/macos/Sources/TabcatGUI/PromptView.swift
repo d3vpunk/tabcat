@@ -25,7 +25,7 @@ struct PromptView: View {
             chips
             breadcrumb
             field
-            if !model.candidates.isEmpty {
+            if !model.suggestions.isEmpty {
                 list
             }
             footer
@@ -50,7 +50,7 @@ struct PromptView: View {
         // instead of reading as loose pills.
         GlassEffectContainer(spacing: 8) {
             HStack(spacing: 8) {
-                ForEach(Array(model.directories.enumerated()), id: \.element.id) { index, directory in
+                ForEach(Array(model.chips.enumerated()), id: \.element.id) { index, directory in
                     chip(directory, index: index)
                 }
             }
@@ -184,26 +184,40 @@ struct PromptView: View {
 
     // MARK: - Candidates
 
-    /// Every candidate, not just the one the ghost can show.
+    /// Everything the daemon can say about this line, in one place.
     ///
-    /// The ghost is drawn after the caret, so it can only ever append — a candidate
-    /// that corrects the spelling or a handle that expands to something else shows
-    /// nothing at all, and used to be invisible as well as unreachable. The list has
-    /// no such constraint, which is the plainest reason a real interface beats a
-    /// single line of terminal.
+    /// Three sources, three sections. Completions from `predict`, which can only match
+    /// a prefix — the ghost shows one of them and even then only when it appends, so a
+    /// candidate that corrects the spelling or expands a handle used to be invisible as
+    /// well as unreachable. History from `search`, which matches anywhere in the line
+    /// and is therefore what retires ^R. Directories from `cwds`, which is how the
+    /// sixth-ranked one is reachable at all now that the chip row shows five.
     ///
-    /// Shown on an empty line too: that is the frecency ranking for this directory,
-    /// and opening a launcher onto "what you usually do here" is the whole point.
+    /// Shown on an empty line too: that is the frecency ranking for this directory
+    /// plus the last commands anywhere, and opening a launcher onto "what you usually
+    /// do here" is the whole point.
+    ///
     /// Six rows on screen. The rest scrolls rather than being cut off — the daemon
     /// ranks up to fifty and a list that simply ended at the sixth would look like
     /// there was no seventh.
     private static let visibleRows = 6
     private static let rowHeight: CGFloat = 22
     private static let rowSpacing: CGFloat = 1
+    private static let headerHeight: CGFloat = 15
 
+    /// Six rows, plus the headers standing between them.
+    ///
+    /// The headers are counted rather than absorbed. This number is the scroll view's
+    /// frame, so a viewport measured for rows alone would show five and clip the sixth
+    /// the moment a section began — and a clipped row looks like a list that ended.
+    /// One constant for the arithmetic and for the drawn header, so the frame cannot
+    /// promise a row the view does not draw.
     private var listHeight: CGFloat {
-        let rows = min(model.candidates.count, Self.visibleRows)
-        return CGFloat(rows) * Self.rowHeight + CGFloat(max(0, rows - 1)) * Self.rowSpacing
+        let visible = model.suggestions.prefix(Self.visibleRows)
+        let headers = visible.filter { $0.header != nil }.count
+        return CGFloat(visible.count) * Self.rowHeight
+            + CGFloat(headers) * (Self.headerHeight + Self.rowSpacing)
+            + CGFloat(max(0, visible.count - 1)) * Self.rowSpacing
     }
 
     private var list: some View {
@@ -215,8 +229,16 @@ struct PromptView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: Self.rowSpacing) {
-                        ForEach(Array(model.candidates.enumerated()), id: \.offset) { index, candidate in
-                            row(candidate, index: index).id(index)
+                        ForEach(model.suggestions) { entry in
+                            VStack(alignment: .leading, spacing: Self.rowSpacing) {
+                                if let header = entry.header {
+                                    sectionHeader(header)
+                                }
+                                row(entry)
+                            }
+                            // The header travels with its first row, so scrolling the
+                            // selection into view brings the label that explains it.
+                            .id(entry.index)
                         }
                     }
                 }
@@ -231,8 +253,8 @@ struct PromptView: View {
                     }
                 }
             }
-            if model.candidates.count > Self.visibleRows {
-                Text("\(model.selected + 1)/\(model.candidates.count)")
+            if model.suggestions.count > Self.visibleRows {
+                Text("\(model.selected + 1)/\(model.suggestions.count)")
                     .font(Typeface.small(9))
                     .foregroundStyle(.tertiary)
                     .padding(.leading, 8)
@@ -240,25 +262,24 @@ struct PromptView: View {
         }
     }
 
-    private func row(_ candidate: Candidate, index: Int) -> some View {
-        let isSelected = index == model.selected
+    /// Quiet, and only where the list changes subject. The completions have none: they
+    /// are what the prompt line continues into, and a label over them names the default.
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(Typeface.small(9))
+            .foregroundStyle(.tertiary)
+            .padding(.leading, 8)
+            .frame(height: Self.headerHeight, alignment: .bottomLeading)
+    }
+
+    private func row(_ entry: Suggestions.Row) -> some View {
+        let isSelected = entry.index == model.selected
         return HStack(spacing: 8) {
             Text(isSelected ? "›" : " ")
                 .foregroundStyle(.tertiary)
-            if candidate.magicName.isEmpty {
-                typedPrefixDimmed(candidate)
-            } else {
-                // The handle is what you type, the command is what happens — so the
-                // row shows both, and the row itself is the expansion preview.
-                Text("⚡\(candidate.magicName)")
-                    .foregroundStyle(.purple)
-                Text(candidate.display)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            content(entry.suggestion)
             Spacer(minLength: 8)
-            if let marker = sourceMarker(candidate.source) {
+            if let marker = marker(for: entry.suggestion) {
                 Text(marker)
                     .font(Typeface.small(9))
                     .foregroundStyle(.tertiary)
@@ -275,7 +296,50 @@ struct PromptView: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { model.choose(index) }
+        .onTapGesture { model.choose(entry.index) }
+    }
+
+    @ViewBuilder
+    private func content(_ suggestion: Suggestion) -> some View {
+        switch suggestion {
+        case let .completion(candidate):
+            if candidate.magicName.isEmpty {
+                typedPrefixDimmed(candidate)
+            } else {
+                // The handle is what you type, the command is what happens — so the
+                // row shows both, and the row itself is the expansion preview.
+                Text("⚡\(candidate.magicName)")
+                    .foregroundStyle(.purple)
+                Text(candidate.display)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        case let .history(line):
+            // Nothing dimmed: a fuzzy hit matches scattered through the line, so there
+            // is no prefix that repeats what was typed and marking the matched letters
+            // would light up single characters across the row.
+            Text(line)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        case let .directory(directory):
+            Text(PathLabel.full(of: directory.path))
+                .lineLimit(1)
+                // From the front, where a path carries the least: every path on the
+                // machine begins the same way and the last component is the name.
+                .truncationMode(.head)
+        }
+    }
+
+    /// The marker in the right-hand column. `·cd` earns its place: it is the one row
+    /// where Enter does something other than fill the line in, and the column that
+    /// already says where a row came from is where a reader looks for that.
+    private func marker(for suggestion: Suggestion) -> String? {
+        switch suggestion {
+        case let .completion(candidate): return sourceMarker(candidate.source)
+        case .history: return nil
+        case .directory: return "·cd"
+        }
     }
 
     /// The part of a row that repeats what was typed is dimmed, so the eye lands on

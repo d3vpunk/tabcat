@@ -7,7 +7,24 @@ final class PromptModel: ObservableObject {
     /// label, which truncates every one of them to three characters. Frecency
     /// ranking means the first chip is usually right anyway, so the tail cost
     /// readability for entries nobody was going to pick.
-    static let directoryLimit = 5
+    ///
+    /// A display cap and no longer a fetch cap. The list filters everything the daemon
+    /// ranked, so the sixth directory is reachable by typing two letters of its name —
+    /// it just does not get a chip.
+    static let chipLimit = 5
+
+    /// How many directories to hold for the list. Fifty rather than everything because
+    /// the op takes a limit and `0` means ten to the daemon, not all of them.
+    static let cwdLimit = 50
+
+    /// Ten history hits, the number the REPL's own ^R shows.
+    ///
+    /// Explicit, and not `0` the way `predict` is asked. There the limit would have been
+    /// an invisible cap on a ranking that is exhaustive by nature. Here it is the other
+    /// way round: `search` scores a substring above a subsequence, and the subsequence
+    /// tail runs to however much history there is — `tst` matches almost every line ever
+    /// typed. The ranking is the filter, and ten is where it is still one.
+    static let historyLimit = 10
 
     /// Only what the user typed. The ghost is never part of this — that is the
     /// whole reason Enter still means Enter and the caret cannot wander into a
@@ -26,7 +43,7 @@ final class PromptModel: ObservableObject {
             // REPL's `withLine`, and it is what makes Enter on a navigated row safe:
             // a row can only be selected deliberately, never left over from before.
             selected = 0
-            requestPrediction()
+            requestSuggestions()
         }
     }
     /// Caret position in code points. Real, not assumed to be the end of the line:
@@ -35,6 +52,17 @@ final class PromptModel: ObservableObject {
     @Published private(set) var caret = 0
     /// Ranked candidates for the current line. Empty is a real answer.
     @Published private(set) var candidates: [Candidate] = []
+    /// Fuzzy history hits for the current line, from `search`. The section that makes
+    /// ^R unnecessary: these match anywhere in the line, where a candidate matches a
+    /// prefix.
+    ///
+    /// Held until the next answer arrives rather than cleared when the line changes,
+    /// which means that for the moment between the two round trips this section still
+    /// answers the previous keystroke. Deliberate: emptying it would make the list
+    /// shrink and grow again on every character, and the run card is positioned under
+    /// the launcher's measured glass — the card would twitch along with it. Safe
+    /// because a row is only taken deliberately, with ↑/↓ onto a row that is on screen.
+    @Published private(set) var historyHits: [String] = []
     /// The caret the list was asked for. A candidate's `replace` counts code points
     /// backwards from exactly this position, so it is part of the answer, not context.
     private var candidatesCaret = 0
@@ -50,8 +78,35 @@ final class PromptModel: ObservableObject {
     /// Magic-name handle the daemon offers for this line, or "".
     @Published private(set) var handle = ""
 
-    /// The candidate the ghost shows and Tab applies.
-    var current: Candidate? { candidates.indices.contains(selected) ? candidates[selected] : nil }
+    /// The whole list under the prompt: completions, history, directories.
+    ///
+    /// Computed rather than stored, so it cannot describe a line that has moved on.
+    /// Every source it reads is published, so a view watching this model re-renders on
+    /// any of them.
+    var suggestions: [Suggestions.Row] {
+        Suggestions.rows(
+            completions: candidates,
+            history: historyHits,
+            directories: directories,
+            typed: typed,
+            cwd: cwd
+        )
+    }
+
+    var selectedSuggestion: Suggestion? {
+        let rows = suggestions
+        return rows.indices.contains(selected) ? rows[selected].suggestion : nil
+    }
+
+    /// The candidate the ghost shows and Tab applies — only on a completion row.
+    ///
+    /// Nil on the other two kinds, and that makes the ghost fall silent by itself: a
+    /// ghost promises "this gets appended", and both a history hit and a directory
+    /// break that promise. One replaces the line, the other puts no text in it at all.
+    var current: Candidate? {
+        guard case let .completion(candidate) = selectedSuggestion else { return nil }
+        return candidate
+    }
 
     /// Computed rather than stored, so moving the selection cannot leave a ghost
     /// behind that belongs to a different row.
@@ -78,9 +133,13 @@ final class PromptModel: ObservableObject {
         typed = text
         // `typed`'s observer covers a text change; a caret that moved on its own has
         // no other trigger, and it changes what is being completed.
-        if before == text, caretMoved { requestPrediction() }
+        if before == text, caretMoved { requestSuggestions() }
     }
+    /// Every directory the daemon ranked, newest-and-most-used first. The chip row
+    /// shows the head of it, the list filters all of it.
     @Published private(set) var directories: [Directory] = []
+    /// The head of the ranking, one chip each.
+    var chips: [Directory] { Array(directories.prefix(Self.chipLimit)) }
     /// The directory the prompt works in.
     ///
     /// Stored, and no longer derived from the chip row. A directory change can land
@@ -157,7 +216,11 @@ final class PromptModel: ObservableObject {
 
     /// Index of the chip for the current directory, or nil once the prompt has moved
     /// somewhere the row does not list.
-    var selection: Int? { directories.firstIndex { $0.path == cwd } }
+    ///
+    /// Against the chips and not the whole ranking: the fortieth directory is in
+    /// `directories` for the list to filter, and reporting index 39 as the active chip
+    /// would highlight nothing while claiming something was highlighted.
+    var selection: Int? { chips.firstIndex { $0.path == cwd } }
 
     struct Crumb: Identifiable, Equatable {
         let label: String
@@ -256,7 +319,7 @@ final class PromptModel: ObservableObject {
 
     private func loadDirectories(_ client: DaemonClient) async {
         do {
-            let entries = try await client.cwds(limit: Self.directoryLimit)
+            let entries = try await client.cwds(limit: Self.cwdLimit)
             if entries.isEmpty {
                 // Not an error: imported shell history carries no directory, so a
                 // fresh install has genuinely learned none.
@@ -289,7 +352,7 @@ final class PromptModel: ObservableObject {
             status = "\(reason) — directories guessed from git repositories on disk"
             return
         }
-        let paths = await DirectorySeed.gitRepositories(limit: Self.directoryLimit)
+        let paths = await DirectorySeed.gitRepositories(limit: Self.cwdLimit)
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         directories = paths.isEmpty
             ? [Directory(path: home, learned: false)]
@@ -316,26 +379,28 @@ final class PromptModel: ObservableObject {
     /// From a directory the row does not list there is no current chip to step from,
     /// so the cycle enters the row at the end it is heading towards.
     private func step(by offset: Int) {
-        guard !directories.isEmpty else { return }
+        let chips = chips
+        guard !chips.isEmpty else { return }
         guard let current = selection else {
-            select(offset > 0 ? 0 : directories.count - 1)
+            select(offset > 0 ? 0 : chips.count - 1)
             return
         }
-        select((current + offset + directories.count) % directories.count)
+        select((current + offset + chips.count) % chips.count)
     }
 
     /// ⌘1…⌘9. Out-of-range digits are ignored rather than clamped: jumping to a
     /// different chip than the one pressed would be worse than doing nothing.
     func select(digit: Int) -> Bool {
         let index = digit - 1
-        guard directories.indices.contains(index) else { return false }
+        guard chips.indices.contains(index) else { return false }
         select(index)
         return true
     }
 
     func select(_ index: Int) {
-        guard directories.indices.contains(index) else { return }
-        navigate(to: directories[index].path)
+        let chips = chips
+        guard chips.indices.contains(index) else { return }
+        navigate(to: chips[index].path)
     }
 
     /// Moves the prompt. Everything that changes the working directory comes through
@@ -348,15 +413,18 @@ final class PromptModel: ObservableObject {
         placed = true
         // The prediction was for the previous directory, so it is now wrong — the
         // cwd boost is a big part of the ranking.
-        requestPrediction()
+        requestSuggestions()
     }
 
-    // MARK: - Prediction
+    // MARK: - Suggestions
 
-    private func requestPrediction() {
+    /// Asks for everything the list shows. Two round trips, one after the other; the
+    /// directories are already here and are filtered locally, so they cost none.
+    private func requestSuggestions() {
         let line = typed
         guard let client else {
             candidates = []
+            historyHits = []
             handle = ""
             return
         }
@@ -369,55 +437,96 @@ final class PromptModel: ObservableObject {
         let cwd = cwd
 
         Task {
-            do {
-                // 0 = everything the daemon ranked; its own `topN` caps that at 50.
-                // Asking for a screenful instead would be a cap nobody can see: the
-                // list would end without saying that it had been cut, and the 7th
-                // candidate would simply not exist.
-                let prediction = try await client.predict(
-                    line: line, cursorCodePoints: cursor, cwd: cwd, limit: 0
-                )
-                // The answer describes the line as it was when we asked. If the
-                // user kept typing or switched directory, showing it would offer
-                // text they never saw suggested for what is now on screen.
-                guard line == typed, cwd == self.cwd else { return }
-                handle = prediction.handleHint
-                candidates = prediction.candidates
-                candidatesCaret = cursor
-                // A shorter list must not leave the selection pointing past its end.
-                selected = min(selected, max(0, prediction.candidates.count - 1))
-                // A previous failure would otherwise stay on screen forever, since
-                // nothing else ever clears it.
-                if status != "ready" { status = "ready" }
-            } catch let error as DaemonError where error.isWarming {
-                // Normal right after a cold start; the next keystroke tries again.
-                // Guarded on the directory as well as the line, exactly like the answer
-                // above: ⌥-cycling asks again without touching the typed text, so a
-                // late failure for the directory the user just left would otherwise
-                // clear the list that had already arrived for the one they are on.
-                guard line == typed, cwd == self.cwd else { return }
-                candidates = []
-            } catch {
-                guard line == typed, cwd == self.cwd else { return }
-                candidates = []
-                status = describe(error)
-            }
+            await requestCompletions(client, line: line, cursor: cursor, cwd: cwd)
+            await requestHistory(client, line: line, cwd: cwd)
         }
+    }
+
+    private func requestCompletions(
+        _ client: DaemonClient, line: String, cursor: Int, cwd: String
+    ) async {
+        do {
+            // 0 = everything the daemon ranked; its own `topN` caps that at 50.
+            // Asking for a screenful instead would be a cap nobody can see: the
+            // list would end without saying that it had been cut, and the 7th
+            // candidate would simply not exist.
+            let prediction = try await client.predict(
+                line: line, cursorCodePoints: cursor, cwd: cwd, limit: 0
+            )
+            // The answer describes the line as it was when we asked. If the
+            // user kept typing or switched directory, showing it would offer
+            // text they never saw suggested for what is now on screen.
+            guard line == typed, cwd == self.cwd else { return }
+            handle = prediction.handleHint
+            candidates = prediction.candidates
+            candidatesCaret = cursor
+            clampSelection()
+            // A previous failure would otherwise stay on screen forever, since
+            // nothing else ever clears it.
+            if status != "ready" { status = "ready" }
+        } catch let error as DaemonError where error.isWarming {
+            // Normal right after a cold start; the next keystroke tries again.
+            // Guarded on the directory as well as the line, exactly like the answer
+            // above: ⌥-cycling asks again without touching the typed text, so a
+            // late failure for the directory the user just left would otherwise
+            // clear the list that had already arrived for the one they are on.
+            guard line == typed, cwd == self.cwd else { return }
+            candidates = []
+        } catch {
+            guard line == typed, cwd == self.cwd else { return }
+            candidates = []
+            status = describe(error)
+        }
+    }
+
+    /// The history section, in a second round trip.
+    ///
+    /// Deliberately after the prediction rather than beside it: the ghost hangs on
+    /// `predict`, and a fuzzy match over the whole history must not be what delays a
+    /// keystroke. Ordering them costs nothing anyway — the socket carries one request at
+    /// a time by construction, so asking concurrently would only reshuffle the queue.
+    private func requestHistory(_ client: DaemonClient, line: String, cwd: String) async {
+        do {
+            let hits = try await client.search(query: line, cwd: cwd, limit: Self.historyLimit)
+            guard line == typed, cwd == self.cwd else { return }
+            historyHits = hits
+            clampSelection()
+        } catch {
+            // Quiet on purpose, and this is the one place where that is right: anything
+            // worth reporting — a dead socket, a warming predictor — just happened to the
+            // prediction on the same connection, and the status line already says so.
+            // Saying it twice would replace the useful message with the vaguer one.
+            guard line == typed, cwd == self.cwd else { return }
+            historyHits = []
+        }
+    }
+
+    /// A shorter list must not leave the selection pointing past its end. Both answers
+    /// change the list's length, so both call this.
+    private func clampSelection() {
+        selected = min(selected, max(0, suggestions.count - 1))
     }
 
     /// ↑/↓ through the list. Wraps, and reports whether it did anything so the key
     /// can fall through to the caret when there is nothing to move through.
     @discardableResult
     func moveSelection(by offset: Int) -> Bool {
-        guard candidates.count > 1 else { return false }
-        selected = (selected + offset + candidates.count) % candidates.count
+        let count = suggestions.count
+        guard count > 1 else { return false }
+        selected = (selected + offset + count) % count
         return true
     }
 
-    /// Clicking a row does what Enter on it does: fill the line, do not run it.
+    /// Clicking a row does what Enter on it does — which is not the same thing for all
+    /// three kinds. A command is filled in, a directory is gone to.
     func choose(_ index: Int) {
-        guard candidates.indices.contains(index) else { return }
+        let rows = suggestions
+        guard rows.indices.contains(index) else { return }
         selected = index
+        if case let .directory(directory) = rows[index].suggestion {
+            move(to: directory)
+            return
+        }
         _ = acceptCurrent()
     }
 
@@ -431,7 +540,20 @@ final class PromptModel: ObservableObject {
     /// magic handle become the command it stands for. The old version appended the
     /// ghost, so anything without a ghost could not be accepted at all.
     func acceptCurrent() -> Bool {
-        guard let candidate = current else { return false }
+        switch selectedSuggestion {
+        case let .completion(candidate):
+            return accept(candidate)
+        case let .history(line):
+            return acceptWholeLine(line)
+        case .directory, nil:
+            // Nothing to insert. Tab therefore steps past a directory row rather than
+            // taking it — moving the prompt is not something a typing key should do,
+            // and Enter and a click are both there for it.
+            return false
+        }
+    }
+
+    private func accept(_ candidate: Candidate) -> Bool {
         // Moving the caret alone asks for a new list but leaves the old one standing
         // until the answer arrives, and `replace` counts backwards from the caret the
         // daemon was asked about. Splicing the old list against the new caret produced a
@@ -443,6 +565,27 @@ final class PromptModel: ObservableObject {
         guard next != typed else { return false }
         apply(next, caret: acceptedCaret(for: candidate, line: typed, caret: caret))
         return true
+    }
+
+    /// A history hit is the whole line, so it takes the whole line — including whatever
+    /// stands behind the caret.
+    ///
+    /// No freshness guard, and none is needed: `replace` arithmetic is what can go stale
+    /// against a moved caret, and there is none here. The hit was matched against the
+    /// line, not against the position in it.
+    private func acceptWholeLine(_ line: String) -> Bool {
+        guard line != typed else { return false }
+        apply(line, caret: line.unicodeScalars.count)
+        return true
+    }
+
+    /// Goes where a directory row points, and clears the line that found it — the query
+    /// was a way to name the place, and leaving `fron` at the prompt afterwards would
+    /// leave it there as a command.
+    private func move(to directory: Directory) {
+        clearLine()
+        navigate(to: directory.path)
+        status = "ready"
     }
 
     /// Tab: accept, or step to the next candidate when there is nothing left to accept.
@@ -525,6 +668,21 @@ final class PromptModel: ObservableObject {
             status = "⌘Enter to run it, Escape to drop it"
             return
         }
+        // A directory row moves the prompt, on the FIRST Enter and at any index.
+        //
+        // The two-stage Enter exists so that nothing starts before it is visible, and
+        // nothing starts here: navigation makes no card, needs no confirmation and `cd -`
+        // takes it back (Phase 0c). Above that, the row of chips moves on a single click
+        // — a row that needed two would contradict the row directly above it.
+        //
+        // At any index, because a directory row is never "the line as typed": the rule
+        // below leaves index 0 to the typed line, and on a query that only matched a
+        // directory that would have run the query as a command instead of going there.
+        if case let .directory(directory) = selectedSuggestion {
+            move(to: directory)
+            return
+        }
+
         // Enter on a row reached with ↑/↓ fills the line instead of running it, so
         // what is about to run is always visible before it does. Only reachable on
         // purpose: every edit puts the selection back on the top row. Before the

@@ -48,6 +48,21 @@ extension DaemonClient {
         )
     }
 
+    /// `search <limit> <cwd> <query>` — fuzzy history, substring ranked above
+    /// subsequence and the more recent hit first. Literally the same ranking as the
+    /// REPL's ^R: `engine-host.ts` calls the `fuzzySearch` the REPL's own search uses.
+    ///
+    /// This is what `predict` cannot answer. Predictions match a PREFIX, so a typed
+    /// `test` never reaches `npm test`; a search matches anywhere in the line.
+    ///
+    /// One field per row, the line and nothing else. `cwd` is on the wire and the
+    /// daemon ignores it — history search is deliberately global, which is what makes
+    /// it the answer to "I ran this somewhere else last week".
+    func search(query: String, cwd: String, limit: Int) async throws -> [String] {
+        let rows = try await request(op: "search", fields: [String(limit), cwd, query])
+        return rows.dropFirst().compactMap(\.first).filter { !$0.isEmpty }
+    }
+
     /// `cwds <limit>` — the directories worked in, ranked by frecency. Empty on a
     /// fresh install, because imported shell history carries no directory. The
     /// caller has to treat that as "seed your own list", not as "no directories".

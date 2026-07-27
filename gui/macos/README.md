@@ -6,17 +6,50 @@ with a prompt and ghost text from the same engine, and the app you were working 
 stays frontmost.
 
 What works: the global hotkey, the overlay, the directory chip row, the prompt with
-live predictions and a ranked candidate list, running commands in a pseudo terminal
-whose result is fed back to the daemon with `learn` — so overlay usage improves the
-same ranking the zsh plugin uses — and a rail of minimised runs in the bottom-right
-corner.
+live predictions and a list that holds everything the daemon can say about the line,
+running commands in a pseudo terminal whose result is fed back to the daemon with
+`learn` — so overlay usage improves the same ranking the zsh plugin uses — and a rail
+of minimised runs in the bottom-right corner.
 
-The list is shown on an empty line as well, where it is the frecency ranking for the
-current directory: what you usually do here, before you have typed anything. It also
-carries what a ghost cannot. A ghost is drawn after the caret and can only append, so
-a candidate that corrects the spelling (`doc` → `Documents/`) or a magic handle that
-expands to something else entirely has no ghost — and used to be invisible as well as
-unreachable. Accepting therefore applies the candidate, never the ghost.
+## The list
+
+Three sources, three sections, one list — and that is what retires ^R and the
+history mode. In a terminal those exist because there is one line and one key for two
+lists; here nothing has to be switched on to reach the second one, and ↑/↓ walks
+straight through all of it.
+
+**Completions**, from `predict`. They carry what a ghost cannot: a ghost is drawn
+after the caret and can only append, so a candidate that corrects the spelling
+(`doc` → `Documents/`) or a magic handle that expands to something else entirely has
+no ghost — and used to be invisible as well as unreachable. Accepting therefore
+applies the candidate, never the ghost. This section has no header: it is what the
+prompt line continues into, and a label above it would be naming the default.
+
+**History**, from `search`. A prediction matches a *prefix*, so a typed `test` never
+reaches `npm test`. A search matches anywhere in the line, ranks a substring above a
+subsequence and the more recent hit first — the same `fuzzySearch` the REPL's own ^R
+calls. Ten of them, which is what ^R shows; the subsequence tail is otherwise as long
+as your history, since `tst` is a subsequence of almost every line ever typed.
+Taking one replaces the whole line, because that is what it matched.
+
+**Directories**, from `cwds`. The chip row shows five because five is what a row of
+chips fits; this is how the sixth is reachable at all. They appear once two
+characters of the last token match a path — substring and not the subsequence used
+for history, because `tst` is a subsequence of nearly every path on a machine and a
+filter that keeps everything has filtered nothing. Matched against the path as it is
+shown, `~` and all, so typing `~/pro` finds what the eye can read. Enter or a click
+*moves the prompt*, on the first press and wherever the row sits: navigation makes no
+card, needs no confirmation and `cd -` takes it back — and the row of chips directly
+above moves on a single click, so a row that needed two would contradict it. `Tab`
+steps past such a row instead, since there is nothing for a typing key to insert.
+
+On an empty line all of this still answers: the frecency ranking for this directory,
+plus the last lines you ran anywhere. What you usually do here, before you have typed
+anything.
+
+Sectioned rather than merged into one ranking, and that is a decision rather than a
+first step: a command's frecency, a fuzzy match's score and a directory's frecency
+are different units, so a merged order would be an order nobody could explain.
 
 The ghost is drawn in two weights: its first chunk, which `→` takes, a step brighter
 than the rest, which `Tab` takes. It is the one place the difference between the two
@@ -66,8 +99,11 @@ Not built yet:
   through termios, so `sudo` hides a password exactly as it does in Terminal.app.
   The earlier objection applied to routing a SwiftUI text field into the pty, which
   would have shown it in plain text.
-- **filtering the chip row by typing** — ⌘-digit and the ⌥ cycle cover the fluent
-  path, so this waits until the row is long enough to be worth it.
+- **a detail column beside the selected row** — how often a command was run, when it
+  last was, which directory it was learned in. The wire does not carry any of it: a
+  candidate row is insert, display, source, handle and `replace`, and the engine's
+  `RankedCandidate` has a score but no provenance. It needs a change on the
+  TypeScript side first, in a response row the plugin and the REPL also read.
 
 Commands run through `$SHELL -ic`, so aliases, functions and PATH edits from your
 rc file exist — most of what a person types is an alias. `TABCAT_PLUGIN_NO_SETUP=1`
@@ -106,13 +142,13 @@ false alarm on `npm test` trains you to confirm without reading.
 | Escape | one rung at a time: drop a held-back command, else clear the line, else send the card in front to the rail, else hide the overlay and every finished badge with it |
 | click beside a card | the same as that last rung |
 | ⌘1…⌘5 | jump straight to a chip |
-| ↑ / ↓ | move through the candidate list |
-| Tab | accept the selected candidate, or step to the next one when it is already complete |
+| ↑ / ↓ | move through the list, across the section borders |
+| Tab | accept the selected row, or step to the next one when there is nothing to accept |
 | → | accept one chunk, at the end of the line and where a ghost is shown |
 | ⇧Tab | undo the last accept |
-| Enter | on a row reached with ↑/↓: fill the line. Otherwise: run it |
+| Enter | on a row reached with ↑/↓: fill the line. On a directory row: go there. Otherwise: run what is typed |
 | ⌥Enter | a line break — a command may span lines, and no mode is involved |
-| click a row | same as Enter on it — fill the line, do not run |
+| click a row | same as Enter on it |
 | ⌘Enter | confirm a command that was held back |
 | ⌘↓ | send the front card to the rail |
 | click a badge | bring it back to the front, launcher and all |
@@ -201,8 +237,9 @@ swift run TabcatGUI --check
 ```
 
 It resolves the socket path and the wordmark's resource bundle, pings, asks for
-`cwds` and one prediction, runs three pty probes (exit code, a progress bar redrawing
-in place, the `pwd` wrapper), and finishes with the pinned tables below — reporting
+`cwds`, one prediction and two searches, runs three pty probes (exit code, a progress
+bar redrawing in place, the `pwd` wrapper), and finishes with the pinned tables below
+— reporting
 each step. Run it from inside the app (`build/Tabcat.app/Contents/MacOS/TabcatGUI
 --check`) to test what the bundled build sees rather than what `swift run` does. `bad_op: unknown op:
 cwds` means the *running daemon* predates the op — restart it with `tabcat daemon
@@ -213,8 +250,14 @@ swift run TabcatGUI --tables
 ```
 
 Only the tables: exit-status decoding, the hazard scan, accepting, chunking,
-navigation and the layout, all of them pure functions over pinned cases. No daemon,
-no socket, no pty — which is why this and not `--check` is what CI gates on.
+navigation, the badge's path label, the list's three sections and the layout, all of
+them pure functions over pinned cases. No daemon, no socket, no pty — which is why
+this and not `--check` is what CI gates on.
+
+The two halves are deliberate. A table cannot see the wire, so `search` is probed
+live as well: `names list` once came back `bad_fields` for a short field count, and a
+method that reads any failure as "nothing found" would have reported an empty section
+instead of a broken request.
 
 ```sh
 TABCAT_SOCKET=/tmp/scratch.sock swift run TabcatGUI --selftest

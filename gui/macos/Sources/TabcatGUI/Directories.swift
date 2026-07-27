@@ -34,6 +34,10 @@ struct Directory: Identifiable, Equatable {
 /// before it are the context that tells them apart, and the front of the path is the
 /// part every path on the machine has in common.
 enum PathLabel {
+    /// Cached, because it cannot change while the process runs and the directory filter
+    /// would otherwise ask for it once per row per render.
+    static let home = FileManager.default.homeDirectoryForCurrentUser.path
+
     /// `~` for home, `~/projects/tabby` while the whole thing fits, and
     /// `…/prestonpalace-nl/frontend` once it does not.
     ///
@@ -42,7 +46,7 @@ enum PathLabel {
     /// to measure it again on every frame.
     static func trail(
         of path: String,
-        home: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        home: String = PathLabel.home,
         budget: Int = 40
     ) -> String {
         let cleaned = withoutTrailingSlash(path)
@@ -75,6 +79,21 @@ enum PathLabel {
         let complete = kept.count == components.count
         let prefix = complete ? (insideHome ? "~/" : (cleaned.hasPrefix("/") ? "/" : "")) : "…/"
         return prefix + kept.joined(separator: "/")
+    }
+
+    /// The whole path, home as `~`.
+    ///
+    /// What a row in the list shows, and what the directory filter matches against —
+    /// the same string for both, so that typing `~/pro` finds what the eye can read on
+    /// screen. A row has the launcher's width, so unlike the badge nothing has to be
+    /// given up here.
+    static func full(of path: String, home: String = PathLabel.home) -> String {
+        let cleaned = withoutTrailingSlash(path)
+        let root = withoutTrailingSlash(home)
+        guard !root.isEmpty, cleaned != "/" else { return cleaned }
+        if cleaned == root { return "~" }
+        guard cleaned.hasPrefix(root + "/") else { return cleaned }
+        return "~/" + cleaned.dropFirst(root.count + 1)
     }
 
     private static func withoutTrailingSlash(_ path: String) -> String {

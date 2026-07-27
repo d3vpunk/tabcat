@@ -251,8 +251,69 @@ und „im Panel", nie „nicht auf dem Launcher". Jetzt sechs Schirme statt vier
 (dazu der Laptop als `visibleFrame`, also ohne Menüleiste, und ein Portraitschirm)
 und die Überlappung gegen fünf Glashöhen von 240 bis Box + 60.
 
-**Offen:** `search` (History) und `cwds` in dieselbe Liste, sektioniert; die
-Detailspalte rechts. Erst damit fallen ^R und der History-Modus endgültig weg.
+**Erledigt am 2026-07-27: `search` und `cwds` in derselben Liste, sektioniert.** Damit
+fallen ^R und der History-Modus weg — nicht ersetzt, ersatzlos.
+
+Drei Quellen, eine flache Indexliste. Der Header ist eine Eigenschaft der **ersten
+Zeile** eines Abschnitts und keine eigene Zeile: eine Header-Zeile wäre etwas, auf dem
+↑/↓ landen und Enter zugreifen kann. Reihenfolge Completions, History, Directories, und
+die ist nicht kosmetisch — Zeile 0 ist, was der Ghost zeigt und Tab nimmt, also muss der
+Abschnitt oben stehen, den der Prompt gerade vervollständigt.
+
+- **History** füllt genau das Loch, das messbar war: `predict "test"` gibt auf dieser
+  Maschine **einen** Kandidaten (`tests/`, fs), weil Predictions einen *Präfix* matchen.
+  `npm test` ist für sie unerreichbar. `search` matcht überall in der Zeile, mit
+  derselben `fuzzySearch` wie ^R. Zehn Treffer, die Zahl die ^R zeigt: `search` wertet
+  Substring über Subsequence, und der Subsequence-Schwanz ist so lang wie die History —
+  `tst` ist Subsequence fast jeder Zeile. Das Ranking ist der Filter, zehn ist wo es noch
+  einer ist. Annehmen ersetzt die **ganze** Zeile, weil das ist was gematcht hat; deshalb
+  ist eine History-Zeile kein `Candidate` mit grossem `replace` — das rechnet vom Caret
+  zurück und liesse stehen, was dahinter steht.
+- **Directories** macht die Rangliste jenseits der fünf Chips überhaupt erreichbar.
+  `cwds` wird jetzt mit 50 geholt statt mit 5; die Chip-Reihe ist ein Anzeige-Deckel
+  geworden, kein Hol-Deckel. Gefiltert wird lokal, also kostet der Abschnitt keinen
+  Roundtrip. Substring und bewusst nicht die Subsequence der History: `tst` ist
+  Subsequence fast jedes Pfads, und eine Liste von fünfzehn Verzeichnissen auf vierzehn
+  gefiltert hat nichts gefiltert. Gematcht wird der **letzte Token** (`cd fron` ist der
+  Moment, in dem der Abschnitt am meisten gewollt ist und ein Ganzzeilen-Match nichts
+  fände) gegen den Pfad **wie er dasteht**, `~` und alles, damit `~/pro` findet was das
+  Auge liest.
+- **Enter auf einer Verzeichniszeile bewegt sofort**, an jedem Index. Zweistufiges Enter
+  existiert, damit nichts startet, bevor es sichtbar ist — hier startet nichts:
+  Navigation macht keine Card, braucht keine Bestätigung und `cd -` holt sie zurück
+  (Phase 0c). Darüber bewegt die Chip-Reihe auf einen Klick, eine Zeile die zwei
+  bräuchte widerspräche der Reihe direkt über ihr. „An jedem Index" ist der Teil, der
+  einen falschen Ausgang schliesst: Index 0 gehört der getippten Zeile, und bei einer
+  Eingabe, die nur ein Verzeichnis traf, hätte Enter die Eingabe als Kommando ausgeführt.
+  Tab geht stattdessen weiter — eine Tippen-Taste hat nichts einzusetzen.
+- Der Ghost verstummt von selbst, ohne Sonderfall: `current` ist nur auf einer
+  Completion-Zeile gesetzt. Ein Ghost verspricht „das wird angehängt", und beide anderen
+  Arten brechen das Versprechen.
+
+Zwei Roundtrips pro Tastendruck, `search` **nach** `predict`: am Ghost hängt die
+Prediction, und ein Fuzzy-Match über die ganze History darf nicht das sein, was einen
+Tastendruck verzögert. Nebenläufig zu fragen bringt nichts — der Socket trägt konstruktiv
+eine Anfrage zur Zeit, es würde nur dieselbe Warteschlange umsortieren.
+
+Zwei Tabellen, wie üblich nach Fehlerart getrennt. `suggestions: 15/15` über die reine
+Funktion (Reihenfolge, Header genau auf der ersten Zeile, Dedupe, die zwei
+Zeichen Untergrenze, cwd ausgeschlossen, Index == Position). Und ein **Live-Probe** für
+`search`, weil eine Tabelle die Leitung nicht sieht: `names list` kam mal als
+`bad_fields` zurück, und eine Methode, die jeden Fehler als „nichts gefunden" liest,
+hätte einen leeren Abschnitt gemeldet statt einer kaputten Anfrage. Gemessen:
+`search "install"` → `yarn install`, `npm install`.
+
+Die Sechs-Zeilen-Höhe zählt die Header mit, statt sie zu verschlucken. Die Zahl ist das
+Frame des ScrollViews, also hätte ein nur für Zeilen gerechneter Viewport fünf gezeigt
+und die sechste beschnitten, sobald ein Abschnitt beginnt — und eine beschnittene Zeile
+sieht aus wie eine Liste, die zu Ende ist. Eine Konstante für Arithmetik und für den
+gezeichneten Header, damit das Frame keine Zeile verspricht, die die View nicht malt.
+
+**Offen:** die Detailspalte rechts. Sie braucht Daten, die es auf der Leitung nicht gibt
+— eine Kandidatenzeile ist `insert`, `display`, `source`, Handle und `replace`, und
+`RankedCandidate` hat einen Score, aber keine Herkunft. Häufigkeit, letzte Nutzung und
+Lernverzeichnis sind ein TypeScript-Schritt zuerst, in einer Antwortzeile, die Plugin und
+REPL mitlesen.
 
 ### Phase 2 — Prompt-Kern (Tastenparität ✅, Textfeld offen)
 
@@ -400,6 +461,10 @@ der neue Prompt-Kern sind pure Funktionen und gehören gepinnt — die TS-Seite 
 - **Ambient**: Menüleisten-Symbol und Benachrichtigung bei fertigem
   Hintergrund-Run. Sinnvoll, sobald Runs Objekte sind — aber eine eigene
   Entscheidung, kein Automatismus.
-- **Wieviel Sektion braucht die Liste?** Drei Quellen in einer Liste können auch
-  in einem Ranking verschmelzen. Sektionen sind der sichere Start; Verschmelzen
-  wäre eleganter, wenn sich die Scores überhaupt vergleichen lassen.
+- ~~**Wieviel Sektion braucht die Liste?**~~ Entschieden am 2026-07-27, und zwar
+  gegen das Verschmelzen: die drei Scores sind keine vergleichbaren Einheiten. Die
+  Frecency eines Kommandos, der Substring-über-Subsequence-Score eines Fuzzy-Treffers
+  und die Frecency eines Verzeichnisses zusammenzuwerfen gäbe eine Reihenfolge, die
+  niemand erklären kann — auch nicht der, der sie später reparieren muss. Zwei Header
+  statt drei: die Completions tragen keinen, weil sie das sind, in das die Prompt-Zeile
+  weiterläuft, und ein Label darüber den Normalfall benennen würde.

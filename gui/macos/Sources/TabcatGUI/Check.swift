@@ -83,11 +83,13 @@ enum Check {
             ok = false
         }
 
-        // A prediction for a line that any shell history contains, in a directory
-        // the daemon has actually seen — otherwise a miss would look like a bug.
+        // A directory the daemon has actually seen, for everything that takes one below
+        // — otherwise a miss would look like a bug instead of like an empty directory.
+        let cwd = (try? await client.cwds(limit: 1))?.first?.path
+            ?? FileManager.default.homeDirectoryForCurrentUser.path
+
+        // A prediction for a line that any shell history contains.
         do {
-            let entries = try await client.cwds(limit: 1)
-            let cwd = entries.first?.path ?? FileManager.default.homeDirectoryForCurrentUser.path
             let line0 = "g"
             let prediction = try await client.predict(
                 line: line0,
@@ -107,6 +109,30 @@ enum Check {
             line(true, "predict: daemon still warming — normal right after a cold start")
         } catch {
             line(false, "predict: \(error)")
+            ok = false
+        }
+
+        // The history section, over the wire, because the table above cannot see the
+        // wire. `names list` was the lesson: a short field count comes back `bad_fields`,
+        // and a method that treats any failure as "nothing found" reports an empty
+        // section instead of a broken request. The feature would have been quietly dead.
+        //
+        // Two queries, and the second is the point: `predict` matches a PREFIX, so a
+        // query taken from the middle of a line is exactly what only `search` can answer.
+        do {
+            let recent = try await client.search(query: "", cwd: cwd, limit: 3)
+            line(!recent.isEmpty, "search \"\": \(recent.count) recent line(s)")
+            for hit in recent { print("        \(hit)") }
+            if recent.isEmpty { ok = false }
+
+            let infix = try await client.search(query: "install", cwd: cwd, limit: 3)
+            // No failure if nothing matches: this machine's history is whatever it is.
+            line(true, "search \"install\": \(infix.count) hit(s)")
+            for hit in infix { print("        \(hit)") }
+        } catch let error as DaemonError where error.isWarming {
+            line(true, "search: daemon still warming — normal right after a cold start")
+        } catch {
+            line(false, "search: \(error)")
             ok = false
         }
 
@@ -193,6 +219,7 @@ enum Check {
         if !chunking() { ok = false }
         if !navigation() { ok = false }
         if !paths() { ok = false }
+        if !suggestions() { ok = false }
         if !layout() { ok = false }
         return ok ? 0 : 1
     }
@@ -330,6 +357,93 @@ enum Check {
         line(wrong.isEmpty, "paths: \(cases.count - wrong.count)/\(cases.count) as expected")
         for problem in wrong { print("        \(problem)") }
         return wrong.isEmpty
+    }
+
+    /// The three sources in one list, as a table.
+    ///
+    /// Pinned because every way this goes wrong is a section that quietly is not there.
+    /// A directory rule one character too strict shows nothing and looks like a machine
+    /// with nothing learned; one character too loose shows every directory and looks
+    /// like a filter that is not wired up. A missing header turns two sections into one
+    /// long list, and a header on the wrong row labels the section above it. None of it
+    /// throws, and all of it is invisible unless someone happens to look at the right
+    /// keystroke.
+    ///
+    /// Encoded rather than compared field by field, so the table reads as what is on
+    /// screen: `c` completion, `h` history, `d` directory, `+` for the row that carries
+    /// its section's header, `?` for a header that is the wrong one, `!` for a row whose
+    /// index is not its position — which would mean ↑/↓ and a click address different
+    /// rows.
+    private static func suggestions() -> Bool {
+        let home = "/Users/x"
+        let cwd = home + "/projects/tabby"
+        let directories = [
+            Directory(path: cwd, learned: true),
+            Directory(path: home + "/projects/api-rm", learned: true),
+            Directory(path: home + "/projects/api-rm/frontend", learned: true),
+            Directory(path: "/tmp/scratch", learned: true),
+        ]
+
+        let cases: [(typed: String, completions: [String], history: [String], expected: String, why: String)] = [
+            ("", [], [], "", "nothing learned yet, and the honest answer is nothing"),
+            ("", ["npm "], ["npm test"], "c +h",
+             "an empty line opens with both: the stems ranked here, the last lines anywhere"),
+            ("", [], ["npm test"], "+h",
+             "with no completions the history section comes first and keeps its header"),
+            ("npm test", [], ["npm test"], "",
+             "the line as typed goes — it is already on screen, one line up"),
+            ("npm ", ["npm "], ["npm "], "c",
+             "a history hit the completions already offer would be a row that teaches nothing"),
+            ("test", [], ["npm test"], "+h",
+             "the hole this section fills: `predict` matches a prefix and never reaches this"),
+
+            ("fr", [], [], "+d", "two letters is enough to pull up a directory"),
+            ("f", [], [], "", "one letter matches half the disk, so it matches nothing here"),
+            ("cd fr", [], [], "+d", "matched on the LAST TOKEN, which is how a path gets typed"),
+            ("FR", [], [], "+d", "case-insensitive, like every other match in this list"),
+            ("tabby", [], [], "", "the only match is where the prompt already stands"),
+            ("api-rm", [], [], "+d d", "two matches, one header, and it sits on the first"),
+            ("~/pro", [], [], "+d d",
+             "matched against the path as SHOWN, so `~` finds what the eye can read"),
+            ("scratch", [], [], "+d", "outside home, where there is no `~` to collapse"),
+
+            ("np", ["npm "], ["npm test", "npm run build"], "c +h h",
+             "every rule at once: order, one header per section, and no duplicate"),
+        ]
+
+        var wrong: [String] = []
+        for probe in cases {
+            let rows = Suggestions.rows(
+                completions: probe.completions.map { candidate($0, replace: 0) },
+                history: probe.history,
+                directories: directories,
+                typed: probe.typed,
+                cwd: cwd,
+                home: home
+            )
+            let got = describe(rows)
+            if got != probe.expected {
+                wrong.append("\(probe.typed.debugDescription) -> \(got.isEmpty ? "(empty)" : got), want \(probe.expected.isEmpty ? "(empty)" : probe.expected) (\(probe.why))")
+            }
+        }
+        line(wrong.isEmpty, "suggestions: \(cases.count - wrong.count)/\(cases.count) as expected")
+        for problem in wrong { print("        \(problem)") }
+        return wrong.isEmpty
+    }
+
+    private static func describe(_ rows: [Suggestions.Row]) -> String {
+        rows.enumerated().map { position, row in
+            let kind: String
+            let title: String
+            switch row.suggestion {
+            case .completion: kind = "c"; title = ""
+            case .history: kind = "h"; title = Suggestions.historyTitle
+            case .directory: kind = "d"; title = Suggestions.directoriesTitle
+            }
+            let numbered = row.index == position ? "" : "!"
+            guard let header = row.header else { return numbered + kind }
+            return numbered + (header == title ? "+" : "?") + kind
+        }.joined(separator: " ")
     }
 
     /// The layout, against screens this machine may or may not have.
