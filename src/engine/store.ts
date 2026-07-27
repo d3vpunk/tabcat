@@ -104,7 +104,12 @@ export function compactHistory(
   }
 }
 
-function acquireLock(file: string, waitMs: number): (() => void) | null {
+/**
+ * Sync lock with a bounded wait; null when the lock stays busy past the
+ * deadline. Shared with the settings store — same lockfile semantics for
+ * every file tabcat writes.
+ */
+export function acquireLock(file: string, waitMs: number): (() => void) | null {
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
