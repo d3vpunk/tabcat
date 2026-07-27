@@ -1,4 +1,5 @@
 import AppKit
+import SwiftTerm
 import SwiftUI
 
 /// Hosts the overlay's content and takes the click that made the window key, rather
@@ -82,7 +83,8 @@ final class OverlayPanel: NSPanel {
         onFocusLost?()
     }
 
-    /// The prompt keeps the keyboard for as long as it is on screen.
+    /// The prompt keeps the keyboard for as long as it is on screen, with one
+    /// exception: a selection dragged in a terminal.
     ///
     /// A click on a run card makes SwiftTerm's view first responder, and that view
     /// forwards keystrokes into the pty — which is a feature that does not exist yet
@@ -101,7 +103,25 @@ final class OverlayPanel: NSPanel {
         // method's business.
         guard event.type == .leftMouseUp else { return }
         guard let field = contentView?.firstDescendant(of: GhostTextView.self) else { return }
+        // A drag that left a selection standing in a terminal parks the keyboard
+        // there: ⌘C is answered by the first responder, and the prompt has nothing
+        // to copy. Only for a mouse-up inside that terminal — a click anywhere else
+        // means back to typing, selection or not. A plain click inside it clears
+        // the selection before this runs, so it falls through to the grab below and
+        // the pty still cannot swallow what is typed next.
+        if let terminal = firstResponder as? TerminalView, terminal.selectionActive,
+           contentView?.hitTest(event.locationInWindow)?.isDescendant(of: terminal) == true {
+            return
+        }
         if firstResponder !== field { makeFirstResponder(field) }
+    }
+}
+
+extension NSWindow {
+    /// The keyboard is parked on a terminal whose selection is still standing —
+    /// `sendEvent` left it there for ⌘C, and nothing else should take it back.
+    var terminalHoldsSelection: Bool {
+        (firstResponder as? TerminalView)?.selectionActive == true
     }
 }
 

@@ -293,10 +293,38 @@ let app = NSApplication.shared
 // No Dock icon, no menu bar, no app switch when the overlay appears. Info.plist
 // carries LSUIElement for the bundled build; this covers a bare `swift run`.
 app.setActivationPolicy(.accessory)
+app.mainMenu = editingKeys()
 
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
+
+/// A main menu that is never shown, for its key equivalents alone.
+///
+/// ⌘C, ⌘V, ⌘X, ⌘A and ⌘Z are not text-view key bindings — they are Edit-menu key
+/// equivalents, and sendEvent routes command keys through `NSApp.mainMenu` even for
+/// an app whose menu bar never appears. Without this menu they reach the prompt as
+/// raw key events nothing handles: paste was a beep. The selectors travel the
+/// responder chain, so the focused text view is what answers them.
+private func editingKeys() -> NSMenu {
+    let edit = NSMenu(title: "Edit")
+    // Undo and redo by name: they are NSResponder informal protocol, routed to the
+    // first responder's undoManager, and have no #selector-able declaration.
+    edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+    edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+    edit.addItem(.separator())
+    edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    edit.addItem(.separator())
+    edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+    let main = NSMenu()
+    let item = NSMenuItem()
+    item.submenu = edit
+    main.addItem(item)
+    return main
+}
 
 /// The controller is built here rather than at top level: top-level code is not
 /// main-actor isolated, and everything it touches is.

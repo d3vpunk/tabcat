@@ -82,19 +82,33 @@ struct PromptField: NSViewRepresentable {
         // is where publishing is undefined behaviour. It fired on every accept, undo
         // and clear, not in some corner case.
         context.coordinator.applying = true
-        if view.string != text {
+        let replaced = view.string != text
+        if replaced {
             view.string = text
         }
-        let target = utf16Offset(of: caret, in: text)
-        if view.selectedRange() != NSRange(location: target, length: 0) {
-            view.setSelectedRange(NSRange(location: target, length: 0))
+        // The caret is only enforced when the model moved it itself — an accept, an
+        // undo, a clear. Most updates are the editor's last report echoed straight
+        // back, and enforcing the caret on those collapsed every selection in the
+        // same round trip that made it: the drag reported its start as the caret,
+        // and the echo came back as a zero-length range. After a text replacement
+        // it is always enforced — a selection measured against the old line has
+        // nothing to survive into.
+        let reported = context.coordinator.reported
+        if replaced || reported?.text != text || reported?.caret != caret {
+            let target = utf16Offset(of: caret, in: text)
+            if view.selectedRange() != NSRange(location: target, length: 0) {
+                view.setSelectedRange(NSRange(location: target, length: 0))
+            }
         }
         context.coordinator.applying = false
         view.ghost = ghost
         view.chunkLength = utf16Offset(of: chunkLength, in: ghost)
         // Focus can be lost to a click on a card or a chip, and the prompt is where
-        // typing belongs.
-        if view.window?.firstResponder !== view, view.window?.isKeyWindow == true {
+        // typing belongs. Not while a terminal holds a selection: the keyboard is
+        // parked there on purpose (`OverlayPanel.sendEvent`), and this runs on every
+        // model change — streaming output must not yank it back mid-⌘C.
+        if view.window?.firstResponder !== view, view.window?.isKeyWindow == true,
+           view.window?.terminalHoldsSelection != true {
             view.window?.makeFirstResponder(view)
         }
     }
@@ -125,6 +139,9 @@ struct PromptField: NSViewRepresentable {
         /// True while a pushed-down value is being written, so it is not reported
         /// back as an edit.
         var applying = false
+        /// The last (text, caret) sent up, so an update that merely echoes it can be
+        /// told apart from the model moving the caret on its own.
+        var reported: (text: String, caret: Int)?
 
         init(_ parent: PromptField) {
             self.parent = parent
@@ -141,7 +158,9 @@ struct PromptField: NSViewRepresentable {
         }
 
         private func report(_ view: NSTextView) {
-            parent.onEdit(view.string, codePointCaret(view))
+            let caret = codePointCaret(view)
+            reported = (view.string, caret)
+            parent.onEdit(view.string, caret)
         }
 
         /// The caret in code points.
@@ -172,6 +191,17 @@ struct PromptField: NSViewRepresentable {
                 guard view.selectedRange() == NSRange(location: (view.string as NSString).length, length: 0)
                 else { return false }
                 return parent.onKey(.chunk)
+            case #selector(NSResponder.scrollToBeginningOfDocument(_:)):
+                // Home. Cocoa's default scrolls the view; a shell moves the caret.
+                // Document rather than line: the buffer is one command, and a line
+                // break in it is only the panel's width wrapping it.
+                view.moveToBeginningOfDocument(nil)
+                return true
+            case #selector(NSResponder.scrollToEndOfDocument(_:)):
+                // End. Same substitution. ⇧Home/⇧End already move the caret —
+                // Cocoa binds those to the AndModifySelection actions.
+                view.moveToEndOfDocument(nil)
+                return true
             case #selector(NSResponder.moveUp(_:)):
                 return parent.onKey(.up)
             case #selector(NSResponder.moveDown(_:)):
