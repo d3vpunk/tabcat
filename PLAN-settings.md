@@ -1,7 +1,8 @@
 # Plan: Settings — eine Datei, ein Schema, drei Oberflächen
 
-> **Status: in Arbeit.** Schritte ① (Schema + Loader + Schreibpfad) und ②
-> (CLI + `:settings`, live im REPL) umgesetzt, Rest offen. Entwurf am
+> **Status: in Arbeit.** Schritte ① (Schema + Loader + Schreibpfad), ②
+> (CLI + `:settings` + interaktiver Editor, live im REPL) und ③ (Wire-Op)
+> umgesetzt; offen: ④ Gear-Panel, ⑤ Plugin-Fetch. Entwurf am
 > 2026-07-27 gegen den Code geprüft: `:`-Dispatch (`run.ts:27`),
 > `:`-Completion (`app.tsx:102`) und atomares Schreiben unter Lock
 > (`store.ts:55`) existieren bereits — der Plan baut auf ihnen auf statt
@@ -115,22 +116,36 @@ und liest danach neu). `:settings list` bleibt die statische Tabelle,
 - Der Editor ist das REPL-Gegenstück zum Gear-Panel (Schritt ④): beide
   rendern dasselbe Schema, einer in Ink, einer in SwiftUI.
 
-### 3. Wire-Op `settings` — Schritt ③
+### 3. Wire-Op `settings` — ✅ Schritt ③
 
 Flache Zeilen passen exakt ins TSV-Format, der Validator bleibt einer (das
-TS-Schema im Daemon):
+TS-Schema im Daemon). Festes Sechsfeld wie bei `names`, ungenutzte Felder
+leer:
 
 ```text
-→ settings\t<id>\t<protocol>\tlist
-← ok\t<id>
-← <key>\t<type>\t<value>\t<default>\t<constraint>\t<label>\t<section>\t<live>
-→ settings\t<id>\t<protocol>\tset\t<key>\t<value>
-← ok\t<id>\t<effektiver-wert>   |   err\t<id>\tinvalid_value\t<message>
+→ settings\t<id>\t<protocol>\t<list|set|reset>\t<key>\t<value>
+← ok\t<id>                                          (list)
+← <key>\t<type>\t<value>\t<default>\t<constraint>\t<label>\t<description>\t<live>\t<overridden>
+← ok\t<id>\t<effektiver-wert>                       (set/reset)
+← err\t<id>\tbad_value\t<message>
 ```
 
-Protokoll-Bump. Der Daemon liest die Datei bei `set` neu (er ist der
-Schreiber); für `engine.*`-Keys entscheidet `appliesLive`, ob ein
-Predictor-Rebuild fällig ist oder „ab Neustart" gilt.
+Abweichungen vom ursprünglichen Entwurf, mit Grund:
+
+- **Kein Protokoll-Bump.** Eine neue Op ist additiv: alte Clients senden sie
+  nie, ein neuer Client gegen einen alten Daemon bekommt `bad_op` und kann
+  degradieren. Ein Bump hätte jedes alte Plugin gegen einen neuen Daemon
+  stillgelegt — ohne Not.
+- `reset` als dritte Sub-Op (das Gear-Panel braucht „Zurücksetzen").
+- Zeilen tragen `description` und `overridden` statt `section` (ableitbar
+  aus dem Key): das Panel ist das einzige Frontend mit Platz für
+  Beschreibungen, und ohne `overridden` wüsste kein Client, ob Reset etwas
+  täte.
+- `bad_value` statt eines neuen `invalid_value`-Codes — der Code existiert.
+- Kein Warming-Guard: Settings berühren den Predictor nicht, das Panel
+  rendert auch während des Model-Builds. Shape-Prüfung im Parser
+  (`protocol.ts`), Key-Existenz im Server — dieselbe Schichtung wie
+  cli-args/cli. Parser-Kommentar hält die Additiv-Regel fest.
 
 ### 4. GUI: Gear + schema-getriebenes Panel — Schritt ④
 
@@ -182,7 +197,7 @@ Präzedenz-Modell trägt beides.
 1. ✅ **Schema + Loader + Schreibpfad** (`src/settings/`, Tests)
 2. ✅ **CLI `tabcat settings` + `:settings`** — kleinster Ende-zu-Ende-Beweis:
    `repl.dropdownRows` + `repl.footer` wirken live
-3. **Wire-Op + Protokoll-Bump** (Transcript-Tests)
+3. ✅ **Wire-Op** (Transcript-Tests; ohne Protokoll-Bump, s. o.)
 4. **Gear-Panel** (schema-getrieben, Boot-Pfad-Keys, Parity-Test)
 5. Plugin-Fetch, weitere Keys (`plugin.*`, `engine.*`) — jeweils mit ihrem
    Consumer

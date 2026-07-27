@@ -12,7 +12,9 @@ import { HANDLE_PATTERN } from '../engine/names.js';
  * below. NDJSON stays available for humans via `tabcat simulate --json`.
  *
  * Bumped only on incompatible changes: the plugin sends `protocol` with every
- * request and disables itself on a mismatch instead of misrendering.
+ * request and disables itself on a mismatch instead of misrendering. Adding an
+ * op is NOT incompatible — an old client never sends it, a new client against
+ * an old daemon gets `bad_op` and can degrade — so `settings` did not bump.
  */
 export const PROTOCOL_VERSION = 1;
 
@@ -39,7 +41,10 @@ export type DaemonRequest =
   | { op: 'search'; id: string; limit: number; cwd: string; query: string }
   // No cwd field, unlike every other op: this is what a client asks BECAUSE it
   // has no working directory to send.
-  | { op: 'cwds'; id: string; limit: number };
+  | { op: 'cwds'; id: string; limit: number }
+  // The parser checks only the shape; whether `key` exists is the schema's
+  // question and stays in the server — same split as cli-args vs cli.
+  | { op: 'settings'; id: string; sub: 'list' | 'set' | 'reset'; key: string; value: string };
 
 export interface ParseFailure {
   ok: false;
@@ -121,6 +126,7 @@ const FIELD_COUNT: Record<DaemonRequest['op'], number> = {
   names: 7,
   search: 6,
   cwds: 4,
+  settings: 6,
 };
 
 /** Clock skew a `learn` timestamp may have; beyond that it is a client bug. */
@@ -225,6 +231,17 @@ export function parseRequest(rawLine: string): ParseResult {
       if (sub === 'delete' && line.trim() === '') return fail(rawId, 'bad_value', 'line must not be empty');
       if (sub === 'resolve' && !HANDLE_PATTERN.test(name)) return fail(rawId, 'bad_value', `invalid handle: ${truncate(name)}`);
       return { ok: true, request: { op: 'names', id: rawId, sub, cwd, name, line } };
+    }
+    case 'settings': {
+      const sub = fields[3] ?? '';
+      if (sub !== 'list' && sub !== 'set' && sub !== 'reset') {
+        return fail(rawId, 'bad_value', `unknown settings op: ${truncate(sub)}`);
+      }
+      const key = value(4);
+      if (sub !== 'list' && key === '') return fail(rawId, 'bad_value', 'key must not be empty');
+      // `value` stays unvalidated here on purpose: even an empty string may be
+      // a legitimate value for a future string setting — the schema decides.
+      return { ok: true, request: { op: 'settings', id: rawId, sub, key, value: value(5) } };
     }
   }
 }

@@ -3,6 +3,8 @@ import { dirname } from 'node:path';
 import { Server, Socket, createServer } from 'node:net';
 import { FsLike } from '../engine/fs-completer.js';
 import { RankedCandidate } from '../engine/predictor.js';
+import { SETTINGS, SettingSpec, parseInput, specFor } from '../settings/schema.js';
+import { clearSetting, readSettings, settingsFileFor, writeSetting } from '../settings/store.js';
 import { VERSION } from '../version.js';
 import { EngineHost } from './engine-host.js';
 import { pingDaemon } from './client.js';
@@ -336,7 +338,56 @@ function handleLine(line: string, host: EngineHost, options: DaemonOptions): Lin
       }
       return { response: ok(request.id, host.namesDelete(request.line) ? 'deleted' : 'absent') };
     }
+
+    // No warming guard on any settings sub: nothing here touches the
+    // predictor, so a GUI can render its settings panel while the model builds.
+    case 'settings': {
+      const file = settingsFileFor(options.historyFile);
+      if (request.sub === 'list') {
+        const current = readSettings(file);
+        for (const warning of current.warnings) options.onWarn?.(warning);
+        const rows: string[][] = [['ok', request.id]];
+        for (const spec of SETTINGS) {
+          rows.push([
+            spec.key,
+            spec.type,
+            String(current.values.get(spec.key)),
+            String(spec.default),
+            constraintOf(spec),
+            spec.label,
+            spec.description,
+            spec.appliesLive ? '1' : '0',
+            current.overridden.has(spec.key) ? '1' : '0',
+          ]);
+        }
+        return { response: encodeMessage(rows) };
+      }
+      const spec = specFor(request.key);
+      if (spec === undefined) return { response: err(request.id, 'bad_value', `unknown setting: ${request.key}`) };
+      try {
+        if (request.sub === 'reset') {
+          clearSetting(file, request.key);
+          return { response: ok(request.id, String(spec.default)) };
+        }
+        const parsed = parseInput(spec, request.value);
+        if (!parsed.ok) return { response: err(request.id, 'bad_value', `${request.key}: ${parsed.error}`) };
+        writeSetting(file, request.key, parsed.value);
+        return { response: ok(request.id, String(parsed.value)) };
+      } catch (error) {
+        // A hand-edited file with broken JSON: the write refuses, the client
+        // hears why — the daemon stays up for everyone else.
+        options.onWarn?.(`settings ${request.sub} failed: ${messageOf(error)}`);
+        return { response: err(request.id, 'internal', messageOf(error)) };
+      }
+    }
   }
+}
+
+/** Machine-readable constraint for the wire: the range of an int, the options of an enum. */
+function constraintOf(spec: SettingSpec): string {
+  if (spec.type === 'int') return `${spec.min}..${spec.max}`;
+  if (spec.type === 'enum') return spec.options.join('|');
+  return '';
 }
 
 /** How the line would read after accepting `candidate` — same rule the REPL
