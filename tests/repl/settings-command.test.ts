@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ReplOutput, magicCommandHints } from '../../src/repl/app.js';
 import { handleReplCommand } from '../../src/repl/run.js';
+import { SETTINGS } from '../../src/settings/schema.js';
 import { readSettings, settingsFileFor } from '../../src/settings/store.js';
 
 describe(':settings command', () => {
@@ -38,24 +39,23 @@ describe(':settings command', () => {
   it(':settings list shows every setting with value, default marker and description', () => {
     writeFileSync(settingsFile, JSON.stringify({ repl: { dropdownRows: 9 } }));
     expect(handleReplCommand(':settings list', context())).toBe('handled');
-    expect(output[0]).toEqual({
-      kind: 'settings',
-      rows: [
-        {
-          key: 'repl.dropdownRows',
-          value: '9',
-          isDefault: false,
-          live: true,
-          description: 'How many candidate rows the REPL dropdown shows at once.',
-        },
-        {
-          key: 'repl.footer',
-          value: 'true',
-          isDefault: true,
-          live: true,
-          description: 'The key-hint line under the REPL prompt.',
-        },
-      ],
+    const listed = output[0];
+    if (listed?.kind !== 'settings') throw new Error('expected a settings output');
+    expect(listed.rows.map((row) => row.key)).toEqual(SETTINGS.map((spec) => spec.key));
+    const byKey = new Map(listed.rows.map((row) => [row.key, row]));
+    expect(byKey.get('repl.dropdownRows')).toEqual({
+      key: 'repl.dropdownRows',
+      value: '9',
+      isDefault: false,
+      live: true,
+      description: 'How many candidate rows the REPL dropdown shows at once.',
+    });
+    expect(byKey.get('repl.footer')).toEqual({
+      key: 'repl.footer',
+      value: 'true',
+      isDefault: true,
+      live: true,
+      description: 'The key-hint line under the REPL prompt.',
     });
   });
 
@@ -125,6 +125,8 @@ describe(':settings completion hints', () => {
     expect(magicCommandHints(':settings ')?.map(({ command }) => command)).toEqual([
       ':settings repl.dropdownRows',
       ':settings repl.footer',
+      ':settings gui.launcherWidth',
+      ':settings gui.hotkey',
       ':settings reset',
     ]);
     expect(magicCommandHints(':settings repl.d')?.map(({ command }) => command)).toEqual([
@@ -136,6 +138,8 @@ describe(':settings completion hints', () => {
     expect(magicCommandHints(':settings reset ')?.map(({ command }) => command)).toEqual([
       ':settings reset repl.dropdownRows',
       ':settings reset repl.footer',
+      ':settings reset gui.launcherWidth',
+      ':settings reset gui.hotkey',
     ]);
   });
 

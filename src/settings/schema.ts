@@ -25,7 +25,17 @@ interface SettingBase {
 
 export type SettingSpec =
   | (SettingBase & { readonly type: 'bool'; readonly default: boolean })
-  | (SettingBase & { readonly type: 'int'; readonly default: number; readonly min: number; readonly max: number })
+  | (SettingBase & {
+      readonly type: 'int';
+      readonly default: number;
+      readonly min: number;
+      readonly max: number;
+      /**
+       * UI affordance only, never validation: what one arrow key or stepper
+       * click changes. Any integer inside the range stays settable directly.
+       */
+      readonly step?: number;
+    })
   | (SettingBase & { readonly type: 'enum'; readonly default: string; readonly options: readonly string[] })
   | (SettingBase & { readonly type: 'string'; readonly default: string })
   | (SettingBase & { readonly type: 'hotkey'; readonly default: string });
@@ -48,6 +58,30 @@ export const SETTINGS: readonly SettingSpec[] = [
     label: 'Footer legend',
     description: 'The key-hint line under the REPL prompt.',
     appliesLive: true,
+  },
+  // The two gui.* keys below are BOOT-PATH keys: the overlay needs them before
+  // it can reach the daemon, so BootSettings.swift reads the file directly and
+  // carries its own copies of these defaults. gui/boot-defaults.json is the
+  // shared fixture both sides test against — change a default here, change it
+  // there and in BootSettings.swift, or a pinned test goes red.
+  {
+    key: 'gui.launcherWidth',
+    type: 'int',
+    default: 1200,
+    min: 700,
+    max: 2400,
+    step: 50,
+    label: 'Launcher width',
+    description: 'Width of the overlay launcher in points, fitted to the screen it opens on.',
+    appliesLive: true,
+  },
+  {
+    key: 'gui.hotkey',
+    type: 'hotkey',
+    default: 'opt space',
+    label: 'Overlay hotkey',
+    description: 'The global shortcut that opens the overlay, e.g. "opt space" or "ctrl cmd s".',
+    appliesLive: false,
   },
 ];
 

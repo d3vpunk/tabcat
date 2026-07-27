@@ -82,10 +82,10 @@ export function handleSettingsUiKey(state: SettingsUiState, input: string, key: 
       return { state: base };
     }
     case 'int': {
-      const delta = key.rightArrow === true ? 1 : key.leftArrow === true ? -1 : 0;
-      if (delta === 0) return { state: base };
+      const direction = key.rightArrow === true ? 1 : key.leftArrow === true ? -1 : 0;
+      if (direction === 0) return { state: base };
       const current = base.values.get(spec.key) as number;
-      const next = Math.min(spec.max, Math.max(spec.min, current + delta));
+      const next = Math.min(spec.max, Math.max(spec.min, current + direction * (spec.step ?? 1)));
       // At the bounds the key does nothing — no write, no flicker.
       if (next === current) return { state: base };
       return write(base, spec, next);

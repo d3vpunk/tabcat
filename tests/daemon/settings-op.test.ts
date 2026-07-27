@@ -95,6 +95,7 @@ describe('daemon: settings op', () => {
       'How many candidate rows the REPL dropdown shows at once.',
       '1',
       '1',
+      '1',
     ]);
     expect(byKey.get('repl.footer')).toEqual([
       'repl.footer',
@@ -106,7 +107,10 @@ describe('daemon: settings op', () => {
       'The key-hint line under the REPL prompt.',
       '1',
       '0',
+      '',
     ]);
+    expect(byKey.get('gui.launcherWidth')?.slice(2, 5)).toEqual(['1200', '1200', '700..2400']);
+    expect(byKey.get('gui.launcherWidth')?.[9]).toBe('50'); // stepper affordance
   });
 
   it('set validates through the schema, writes the file and echoes the value', async () => {

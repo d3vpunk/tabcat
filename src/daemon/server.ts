@@ -358,6 +358,8 @@ function handleLine(line: string, host: EngineHost, options: DaemonOptions): Lin
             spec.description,
             spec.appliesLive ? '1' : '0',
             current.overridden.has(spec.key) ? '1' : '0',
+            // What one stepper click changes — UI affordance, not validation.
+            spec.type === 'int' ? String(spec.step ?? 1) : '',
           ]);
         }
         return { response: encodeMessage(rows) };
