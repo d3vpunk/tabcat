@@ -39,6 +39,14 @@ struct PromptView: View {
         // the empty rest of the launcher box stays transparent. .continuous is not
         // cosmetic: the default .circular reads as a hard corner, unlike the Dock.
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        // The glass swallows its own clicks. A Text without a gesture does not
+        // block the tap gesture BEHIND it, and behind the launcher sits the
+        // dismiss layer — so a click on a label or a gap read as "beside the
+        // overlay" and closed it. Buttons and rows inside still win: child
+        // gestures take precedence over this one. The area below the glass,
+        // inside the box, stays dismissive — visually it IS beside.
+        .contentShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .onTapGesture {}
         // The run card is placed directly below this, so its position depends on how
         // tall this actually turned out — which changes when a confirmation card
         // appears.
