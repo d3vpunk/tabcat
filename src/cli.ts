@@ -13,6 +13,8 @@ import { SocketPathError, resolveSocketPath } from './daemon/paths.js';
 import { PROTOCOL_VERSION } from './daemon/protocol.js';
 import { checkEnvironment, defaultCheckDeps, formatCheck, initSnippet, pluginFilePath } from './plugin/init.js';
 import { realFs } from './repl/real-fs.js';
+import { SETTINGS, parseInput, specFor } from './settings/schema.js';
+import { clearSetting, readSettings, settingsFileFor, writeSetting } from './settings/store.js';
 import { VERSION } from './version.js';
 
 
@@ -33,6 +35,7 @@ Commands:
   simulate        Show ranking for a line: --line <str> [--cwd <dir>] [--now <ms>] [--json]
   stats           History overview (entries, directories)
   names           List magic names (Ctrl-N shortcuts from the REPL)
+  settings        Show and change settings (list|get <key>|set <key> <value>|reset <key>)
   daemon          Run the prediction daemon for the zsh plugin (status|stop|path)
   plugin init zsh Print the .zshrc snippet for the zsh plugin [--check]
   help            This help
@@ -155,6 +158,63 @@ switch (args.command) {
     }
     const width = Math.max(...names.map((name) => name.name.length));
     for (const name of names) console.log(`${name.name.padEnd(width)}  ${name.line}`);
+    break;
+  }
+
+  case 'settings': {
+    const settingsFile = settingsFileFor(args.history ?? defaultHistoryFile());
+    const sub = args.subs[0] ?? 'list';
+
+    if (sub === 'list') {
+      const current = readSettings(settingsFile);
+      for (const warning of current.warnings) console.error(`tabcat: ${warning}`);
+      const keyWidth = Math.max(...SETTINGS.map((spec) => spec.key.length)) + 2;
+      const valueWidth = Math.max(7, ...SETTINGS.map((spec) => String(current.values.get(spec.key)).length)) + 2;
+      for (const spec of SETTINGS) {
+        const marker = current.overridden.has(spec.key) ? '*' : ' ';
+        const restart = spec.appliesLive ? '' : ' (takes effect at the next start)';
+        console.log(
+          `${spec.key.padEnd(keyWidth)}${String(current.values.get(spec.key)).padEnd(valueWidth)}${marker} ${spec.description}${restart}`,
+        );
+      }
+      console.log(`\n* changed — \`tabcat settings reset <key>\` restores the default (${settingsFile})`);
+      break;
+    }
+
+    // get/set/reset — the shape is validated in cli-args, the key here.
+    const key = args.subs[1] as string;
+    const spec = specFor(key);
+    if (spec === undefined) {
+      console.error(`tabcat: unknown setting: ${key} — \`tabcat settings list\` shows all keys.`);
+      process.exitCode = 1;
+      break;
+    }
+
+    if (sub === 'get') {
+      // Plain value, nothing else — scriptable.
+      console.log(String(readSettings(settingsFile).values.get(key)));
+      break;
+    }
+
+    try {
+      if (sub === 'reset') {
+        clearSetting(settingsFile, key);
+        console.log(`${key} = ${spec.default} (default)`);
+      } else {
+        const parsed = parseInput(spec, args.subs[2] as string);
+        if (!parsed.ok) {
+          console.error(`tabcat: ${key}: ${parsed.error}`);
+          process.exitCode = 1;
+          break;
+        }
+        writeSetting(settingsFile, key, parsed.value);
+        console.log(`${key} = ${parsed.value}${spec.appliesLive ? '' : ' — takes effect at the next start'}`);
+      }
+    } catch (error) {
+      // A hand-edited file with broken JSON: refuse cleanly, no stack trace.
+      console.error(`tabcat: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
     break;
   }
 
