@@ -173,6 +173,12 @@ final class PromptModel: ObservableObject {
     /// A command held back for confirmation. Waiting rather than running is the
     /// whole point, so this is a state and not a callback.
     @Published private(set) var pending: PendingRun?
+    /// Whether the gear panel replaces the candidate list. A view swap inside the
+    /// same glass, not a second window — the panel keeps the keyboard it has.
+    @Published private(set) var settingsVisible = false
+    /// What `settings list` said, verbatim: the schema arrives over the wire and
+    /// the panel renders it, so a new setting never needs Swift changes.
+    @Published private(set) var settingRows: [SettingRow] = []
 
     struct PendingRun {
         let command: String
@@ -1030,6 +1036,66 @@ final class PromptModel: ObservableObject {
         // The accept stack belongs to one line, exactly as it does in the plugin.
         undoStack.removeAll()
         lastChangeWasAccept = false
+    }
+
+    // MARK: - Settings
+
+    /// The gear. Opening fetches fresh rows — the file may have been edited from
+    /// the REPL or the CLI since the panel was last open.
+    func toggleSettings() {
+        if settingsVisible {
+            closeSettings()
+            return
+        }
+        settingsVisible = true
+        reloadSettings()
+    }
+
+    func closeSettings() {
+        settingsVisible = false
+    }
+
+    /// `set` and `reset` both end in a fresh `list` rather than patching the row
+    /// locally: the daemon owns effective value and overridden flag, and one
+    /// source of truth beats a cheap optimisation on a click-rate interaction.
+    func updateSetting(key: String, value: String) {
+        change(key: key) { try await $0.settingsSet(key: key, value: value) }
+    }
+
+    func resetSetting(key: String) {
+        change(key: key) { try await $0.settingsReset(key: key) }
+    }
+
+    private func change(key: String, _ operation: @escaping (DaemonClient) async throws -> String) {
+        guard let client else { return }
+        Task {
+            do {
+                _ = try await operation(client)
+                settingRows = try await client.settingsList()
+            } catch let error as DaemonError {
+                // The daemon says why (`bad_value` carries the expectation) —
+                // that message is more useful than a generic failure.
+                status = "\(key): \(error.message)"
+            } catch {
+                status = describe(error)
+            }
+        }
+    }
+
+    private func reloadSettings() {
+        guard let client else {
+            status = "settings need a running daemon"
+            return
+        }
+        Task {
+            do {
+                settingRows = try await client.settingsList()
+            } catch let error as DaemonError where error.code == "bad_op" {
+                status = "daemon predates the settings op — restart it with `tabcat daemon stop`"
+            } catch {
+                status = describe(error)
+            }
+        }
     }
 
     private func describe(_ error: Error) -> String {

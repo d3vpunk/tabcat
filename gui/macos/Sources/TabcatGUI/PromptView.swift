@@ -25,7 +25,11 @@ struct PromptView: View {
             chips
             breadcrumb
             field
-            if !model.suggestions.isEmpty {
+            // The gear swaps the candidate list for the settings panel inside the
+            // same glass — no second window, no activation dance.
+            if model.settingsVisible {
+                SettingsPanel(model: model)
+            } else if !model.suggestions.isEmpty {
                 list
             }
             footer
@@ -157,13 +161,18 @@ struct PromptView: View {
         case .down:
             return model.moveSelection(by: 1)
         case .cancel:
-            // One rung at a time, and the order is what makes it predictable: drop a
-            // held-back command, free the prompt line, put the card in front away, and
-            // only with nothing left to tidy does Escape mean the whole overlay.
+            // One rung at a time, and the order is what makes it predictable: close
+            // the settings panel, drop a held-back command, free the prompt line, put
+            // the card in front away, and only with nothing left to tidy does Escape
+            // mean the whole overlay.
             //
             // The last rung is NOT claimed here — `cancelOperation:` travels up the
             // responder chain to the panel, so the window and the flag cannot disagree
             // about whether the overlay is up.
+            if model.settingsVisible {
+                model.closeSettings()
+                return true
+            }
             if model.pending != nil {
                 model.discardPending()
                 return true
@@ -387,6 +396,15 @@ struct PromptView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 12)
+                // The gear sits beside the wordmark: the quiet corner, and the one
+                // place a settings control is looked for.
+                Button { model.toggleSettings() } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 11))
+                        .foregroundStyle(model.settingsVisible ? .secondary : .tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Settings")
                 wordmark
             }
         }

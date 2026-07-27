@@ -36,8 +36,14 @@ final class Controller {
     /// cycle for everyone who changed it.
     private var cycling = false
 
+    /// Re-read on every layout recomputation: `gui.launcherWidth` is applies-live,
+    /// and a stat of a two-line JSON file per launcher opening costs nothing.
+    private static func currentLayout() -> Layout {
+        .onPointerScreen(preferredWidth: BootSettings.load().launcherWidth)
+    }
+
     init() {
-        model.layout = .onPointerScreen()
+        model.layout = Self.currentLayout()
         let frame = model.layout.panelOpen(badges: 0)
         panel = OverlayPanel(contentRect: frame)
         model.panelFrame = frame
@@ -103,7 +109,7 @@ final class Controller {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.model.layout = .onPointerScreen()
+                self.model.layout = Self.currentLayout()
                 self.applyFrame()
             }
         }
@@ -128,7 +134,7 @@ final class Controller {
         // Recomputed every time, for the screen the pointer is on. A layout held from
         // launch described whatever display was attached then — unplug it and the
         // overlay kept opening at coordinates belonging to a screen that was gone.
-        model.layout = .onPointerScreen()
+        model.layout = Self.currentLayout()
         model.launcherVisible = true
         applyFrame()
         // makeKeyAndOrderFront on a nonactivating panel takes the keyboard without

@@ -35,11 +35,15 @@ struct HotKeyCombo {
 
     static func configured(
         _ defaults: UserDefaults = .standard,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileHotkey: String? = BootSettings.load().hotkey
     ) -> HotKeyCombo {
         // Environment first: it is the one a development run can set, and setting it
-        // deliberately should beat whatever is stored.
-        for raw in [environment["TABCAT_HOTKEY"], defaults.string(forKey: "hotkey")] {
+        // deliberately should beat whatever is stored. Then `gui.hotkey` from
+        // settings.json — where the gear panel writes — and only then the legacy
+        // `defaults write … hotkey`, kept so an existing setup does not lose its
+        // combination on update.
+        for raw in [environment["TABCAT_HOTKEY"], fileHotkey, defaults.string(forKey: "hotkey")] {
             if let raw, let parsed = HotKeyCombo(raw) { return parsed }
         }
         return .fallback

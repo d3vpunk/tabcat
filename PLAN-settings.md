@@ -1,8 +1,8 @@
 # Plan: Settings — eine Datei, ein Schema, drei Oberflächen
 
-> **Status: in Arbeit.** Schritte ① (Schema + Loader + Schreibpfad), ②
-> (CLI + `:settings` + interaktiver Editor, live im REPL) und ③ (Wire-Op)
-> umgesetzt; offen: ④ Gear-Panel, ⑤ Plugin-Fetch. Entwurf am
+> **Status: in Arbeit.** Schritte ①–④ umgesetzt (Schema + Loader, CLI +
+> `:settings` + interaktiver REPL-Editor, Wire-Op, Gear-Panel im Overlay);
+> offen: ⑤ Plugin-Fetch. Entwurf am
 > 2026-07-27 gegen den Code geprüft: `:`-Dispatch (`run.ts:27`),
 > `:`-Completion (`app.tsx:102`) und atomares Schreiben unter Lock
 > (`store.ts:55`) existieren bereits — der Plan baut auf ihnen auf statt
@@ -147,28 +147,39 @@ Abweichungen vom ursprünglichen Entwurf, mit Grund:
   (`protocol.ts`), Key-Existenz im Server — dieselbe Schichtung wie
   cli-args/cli. Parser-Kommentar hält die Additiv-Regel fest.
 
-### 4. GUI: Gear + schema-getriebenes Panel — Schritt ④
+### 4. GUI: Gear + schema-getriebenes Panel — ✅ Schritt ④
 
 - Das GUI dupliziert das Schema **nicht** — es holt es über `settings list`
-  und rendert Controls nach Typ: bool = Toggle, int = Stepper mit Range aus
-  `constraint`, enum = Picker, hotkey = Recorder. Ein unbekannter Typ rendert
-  generisch — GUI-Binary und tabcat-Version dürfen auseinanderlaufen, den
-  Skew handhabt `ping` ohnehin.
-- Ausnahme Boot-Pfad: `gui.launcherWidth` und `gui.hotkey` braucht die App
-  vor dem Daemon-Connect — die zwei liest sie direkt aus der Datei (Codable,
-  Defaults in Swift). Drift abgesichert per Cross-Language-Parity-Test nach
-  dem Vorbild von `wire-parity.test.ts`: TS dumpt die effektiven Defaults,
-  die Swift-Seite ihre, CI vergleicht.
-- Präsentation: Gear klein neben dem Wordmark; Klick tauscht die
-  Kandidatenliste gegen die Settings-Ansicht im selben Glas — kein zweites
-  Fenster, kein Activation-Tanz mit dem nonactivating Panel. Escape schließt
-  die Ansicht: neue oberste Sprosse der bestehenden Escape-Leiter.
-- Das Panel ist bewusst Kontrollzentrum für **alle** Namespaces (auch
-  `repl.*`, `plugin.*`) — das einzige Frontend mit Platz für Beschreibungen.
-- Mit diesem Schritt kommen `gui.launcherWidth` (heute Konstante
-  `Layout.swift:20`) und `gui.hotkey` (heute env + `UserDefaults`-Key
-  `hotkey`, `HotKey.swift:42` — der UserDefaults-Key ist Intent und wandert
-  in die Datei; env bleibt Override) ins Schema.
+  (`SettingsOps.swift`) und rendert Controls nach Typ (`SettingsPanel.swift`):
+  bool = Toggle, int = Stepper mit Range aus `constraint` und Schrittweite
+  aus dem neuen `step`-Feld, enum = Picker, hotkey/string/unbekannt =
+  Textfeld mit Commit auf Enter. Ein unbekannter Typ bleibt damit editierbar
+  statt unsichtbar — GUI-Binary und tabcat-Version dürfen auseinanderlaufen.
+- `set`/`reset` enden in einem frischen `list` statt lokalem Patchen: der
+  Daemon besitzt effektiven Wert und `overridden`-Flag. Reset-Knopf nur auf
+  überschriebenen Zeilen; „next start" steht an `appliesLive: false`.
+- Boot-Pfad: `BootSettings.swift` liest `gui.launcherWidth` und `gui.hotkey`
+  direkt aus der Datei (verschachtelt **und** flach, invalid → Default,
+  kaputtes JSON → Defaults — Spiegel von `readSettings`). Breite fließt als
+  `Layout.preferredWidth` (pro Launcher-Öffnung neu gelesen = applies-live),
+  Hotkey als neue Sprosse in `HotKeyCombo.configured`: env >
+  `settings.json` > Legacy-`UserDefaults` > ⌥Space.
+- **Parity über eine gemeinsame Fixture** statt CI-Diff zweier Dumps:
+  `gui/boot-defaults.json`. `tests/settings/boot-defaults.test.ts` pinnt sie
+  ans TS-Schema, die `bootSettings`-Tabelle in `Check.tables` (läuft im
+  gui-macos-CI-Job) pinnt sie an die Swift-Defaults plus 12 Parse-Fälle.
+  Drift auf einer Seite wird rot, ohne neuen CI-Schritt.
+- Präsentation wie geplant: Gear neben dem Wordmark, Panel ersetzt die
+  Kandidatenliste im selben Glas, Escape schließt als neue oberste Sprosse
+  der Leiter (`PromptView.key(.cancel)`).
+- Abweichung: kein Hotkey-**Recorder** — Textfeld mit der Wort-Syntax
+  (`"ctrl cmd s"`), die env-Var und `HotKeyCombo` ohnehin sprechen. Ein
+  Recorder wäre ein eigenes Feature; die Syntax steht in der Beschreibung.
+- Neu im Schema (Consumer-first eingehalten): `gui.launcherWidth`
+  (int 700–2400, step 50, Default 1200) und `gui.hotkey` (hotkey,
+  Default "opt space", `appliesLive: false`). `int`-Specs haben dafür ein
+  optionales `step` — reine UI-Affordanz, nie Validierung; REPL-Editor
+  (←/→) und GUI-Stepper nutzen es, die Wire-Zeile trägt es als zehntes Feld.
 
 ### 5. Plugin-Fetch — später
 

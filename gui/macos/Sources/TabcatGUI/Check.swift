@@ -221,7 +221,64 @@ enum Check {
         if !paths() { ok = false }
         if !suggestions() { ok = false }
         if !layout() { ok = false }
+        if !bootSettings() { ok = false }
         return ok ? 0 : 1
+    }
+
+    /// BootSettings' reading of settings.json, as a table — it mirrors the
+    /// TypeScript reader (`readSettings`) and every divergence is invisible in
+    /// normal use: the overlay just opens at the wrong width or on the wrong key.
+    ///
+    /// The last case is the cross-language pin: `gui/boot-defaults.json` holds the
+    /// defaults both sides promise, a vitest test checks it against the schema and
+    /// this table checks it against BootSettings. Found via the repo layout, so it
+    /// runs in CI (cwd = repo root) and silently skips in a bundled install.
+    private static func bootSettings() -> Bool {
+        let cases: [(json: String?, width: CGFloat, hotkey: String?, why: String)] = [
+            (nil, 1200, nil, "missing file is all defaults"),
+            ("{}", 1200, nil, "empty file is all defaults"),
+            ("{ not json", 1200, nil, "broken JSON is all defaults"),
+            ("{\"gui\": {\"launcherWidth\": 1000}}", 1000, nil, "nested spelling"),
+            ("{\"gui.launcherWidth\": 1000}", 1000, nil, "flat dotted spelling"),
+            ("{\"gui\": {\"launcherWidth\": 100}}", 1200, nil, "below the range falls back"),
+            ("{\"gui\": {\"launcherWidth\": 9999}}", 1200, nil, "above the range falls back"),
+            ("{\"gui\": {\"launcherWidth\": 1000.5}}", 1200, nil, "a fraction is not a width"),
+            ("{\"gui\": {\"launcherWidth\": true}}", 1200, nil, "a bool must not read as width 1"),
+            ("{\"gui\": {\"hotkey\": \"ctrl cmd s\"}}", 1200, "ctrl cmd s", "hotkey read"),
+            ("{\"gui\": {\"hotkey\": 5}}", 1200, nil, "a non-string hotkey stays unset"),
+            ("{\"gui\": {\"launcherWidth\": 800, \"hotkey\": \"opt p\"}}", 800, "opt p", "both at once"),
+        ]
+
+        var wrong: [String] = []
+        for probe in cases {
+            let file = NSTemporaryDirectory() + "tabcat-boot-probe-\(UUID().uuidString).json"
+            if let json = probe.json {
+                try? json.write(toFile: file, atomically: true, encoding: .utf8)
+            }
+            let loaded = BootSettings.load(from: URL(fileURLWithPath: file))
+            try? FileManager.default.removeItem(atPath: file)
+            if loaded.launcherWidth != probe.width || loaded.hotkey != probe.hotkey {
+                wrong.append("\(probe.why): width \(loaded.launcherWidth), hotkey \(loaded.hotkey ?? "nil")")
+            }
+        }
+
+        // The fixture, when the repo layout is around (CI runs from the checkout).
+        var pinned = "fixture not found — skipped (vitest and CI check it)"
+        let fixture = URL(fileURLWithPath: "gui/boot-defaults.json")
+        if let data = try? Data(contentsOf: fixture),
+           let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            let width = (root["gui.launcherWidth"] as? NSNumber)?.intValue
+            let hotkey = root["gui.hotkey"] as? String
+            if width != BootSettings.defaultLauncherWidth || hotkey != BootSettings.defaultHotkey {
+                wrong.append("fixture disagrees: \(width ?? -1) / \(hotkey ?? "nil") — update BootSettings or the schema")
+            } else {
+                pinned = "fixture agrees with the Swift defaults"
+            }
+        }
+
+        line(wrong.isEmpty, "boot settings: \(cases.count - wrong.count)/\(cases.count) parse cases, \(pinned)")
+        for problem in wrong { print("        \(problem)") }
+        return wrong.isEmpty
     }
 
     /// Exit-status decoding, as a table.

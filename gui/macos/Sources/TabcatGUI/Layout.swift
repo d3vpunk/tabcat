@@ -40,22 +40,30 @@ struct Layout: Equatable {
     private static let cardGap: CGFloat = 14
 
     let screen: NSRect
+    /// What the launcher asks for horizontally — `gui.launcherWidth`, clamped to
+    /// the screen below. A parameter and not the constant, so the setting reaches
+    /// the layout without the layout reading files.
+    let preferredWidth: CGFloat
 
-    init(screen: NSRect = NSRect(x: 0, y: 0, width: 1440, height: 900)) {
+    init(
+        screen: NSRect = NSRect(x: 0, y: 0, width: 1440, height: 900),
+        preferredWidth: CGFloat = Layout.preferredLauncherSize.width
+    ) {
         self.screen = screen
+        self.preferredWidth = preferredWidth
     }
 
     /// The screen the pointer is on — where the user is looking, and the only choice
     /// that survives a display being unplugged. Falls back to the main screen, and
     /// then to any screen at all, because `NSScreen.main` is nil while no window is
     /// key.
-    static func onPointerScreen() -> Layout {
+    static func onPointerScreen(preferredWidth: CGFloat = Layout.preferredLauncherSize.width) -> Layout {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) }
             ?? NSScreen.main
             ?? NSScreen.screens.first
-        guard let screen else { return Layout() }
-        return Layout(screen: screen.visibleFrame)
+        guard let screen else { return Layout(preferredWidth: preferredWidth) }
+        return Layout(screen: screen.visibleFrame, preferredWidth: preferredWidth)
     }
 
     // MARK: - Sizes, fitted to this screen
@@ -69,7 +77,7 @@ struct Layout: Equatable {
         // screen work — the box gives up height so the card keeps its place.
         let sharing = max(Self.minimumLauncherHeight, usable - Self.cardGap - Self.minimumCardHeight)
         return CGSize(
-            width: min(Self.preferredLauncherSize.width, screen.width - 2 * Self.margin),
+            width: min(preferredWidth, screen.width - 2 * Self.margin),
             height: min(Self.preferredLauncherSize.height, usable, sharing)
         )
     }
