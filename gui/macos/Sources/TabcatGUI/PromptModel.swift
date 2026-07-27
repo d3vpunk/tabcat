@@ -179,6 +179,10 @@ final class PromptModel: ObservableObject {
     /// What `settings list` said, verbatim: the schema arrives over the wire and
     /// the panel renders it, so a new setting never needs Swift changes.
     @Published private(set) var settingRows: [SettingRow] = []
+    /// Why the panel is empty, when it is. The panel used to guess ("is the
+    /// daemon running?") while the status line below carried the real answer —
+    /// the place the eye is looking should say it.
+    @Published private(set) var settingsNote: String?
 
     struct PendingRun {
         let command: String
@@ -1084,16 +1088,17 @@ final class PromptModel: ObservableObject {
 
     private func reloadSettings() {
         guard let client else {
-            status = "settings need a running daemon"
+            settingsNote = "settings need a running daemon"
             return
         }
         Task {
             do {
                 settingRows = try await client.settingsList()
+                settingsNote = settingRows.isEmpty ? "the daemon reported no settings" : nil
             } catch let error as DaemonError where error.code == "bad_op" {
-                status = "daemon predates the settings op — restart it with `tabcat daemon stop`"
+                settingsNote = "this daemon predates the settings op — `tabcat daemon stop`, the next request starts a fresh one"
             } catch {
-                status = describe(error)
+                settingsNote = describe(error)
             }
         }
     }

@@ -26,7 +26,8 @@ struct SettingsPanel: View {
             .padding(.bottom, 4)
 
             if model.settingRows.isEmpty {
-                Text("nothing to show — is the daemon running?")
+                // The reason, not a guess: reloadSettings put the actual failure here.
+                Text(model.settingsNote ?? "loading…")
                     .font(Typeface.small(11))
                     .foregroundStyle(.tertiary)
                     .padding(8)

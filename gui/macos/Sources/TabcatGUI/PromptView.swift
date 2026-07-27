@@ -22,7 +22,7 @@ struct PromptView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            chips
+            header
             breadcrumb
             field
             // The gear swaps the candidate list for the settings panel inside the
@@ -44,6 +44,33 @@ struct PromptView: View {
         // appears.
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
             model.launcherHeight = height
+        }
+    }
+
+    // MARK: - Header row
+
+    /// Chips on the left, the window controls on the right: gear, then the close
+    /// X in the outermost corner where every window keeps it. The X does what a
+    /// click beside the launcher does — same intent, same code — it just makes
+    /// the way out visible instead of relying on everyone knowing the gesture.
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            chips
+            Spacer(minLength: 12)
+            Button { model.toggleSettings() } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12))
+                    .foregroundStyle(model.settingsVisible ? .secondary : .tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
+            Button { model.onDismiss?() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Close")
         }
     }
 
@@ -396,15 +423,6 @@ struct PromptView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 12)
-                // The gear sits beside the wordmark: the quiet corner, and the one
-                // place a settings control is looked for.
-                Button { model.toggleSettings() } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 11))
-                        .foregroundStyle(model.settingsVisible ? .secondary : .tertiary)
-                }
-                .buttonStyle(.plain)
-                .help("Settings")
                 wordmark
             }
         }
