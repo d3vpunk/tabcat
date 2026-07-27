@@ -23,6 +23,9 @@ struct RunCard: View {
     /// Closes this run. Terminates it first when it is still going — which is why
     /// the button says so rather than showing the same ✕ in both cases.
     let onClose: () -> Void
+    /// Runs the same command again. Only offered once the run has finished — on a
+    /// running one "again" has two readings, and neither is worth a button.
+    let onRerun: () -> Void
 
     @State private var hovering = false
 
@@ -43,21 +46,30 @@ struct RunCard: View {
                 // thing itself.
                 //
                 // It fits by arithmetic, not by hope: 28 pt of padding plus a 13 pt line
-                // at Menlo 11, this spacing, and a 10 pt line at Menlo 9 comes to 54 of
-                // the badge's 56 (line heights measured, not assumed). A larger typeface
-                // needs a taller `Layout.badgeSize` — the card anchors its content to the
-                // top, so what does not fit is clipped away silently.
-                Text(PathLabel.trail(of: run.cwd))
-                    .font(Typeface.small(9))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    // From the front: a path that still does not fit loses the part
-                    // furthest from what it identifies.
-                    .truncationMode(.head)
-                    // Lined up with the command above rather than with the status dot,
-                    // so the two lines read as one block. Derived from the dot's column
-                    // and the header's spacing instead of measured off a screenshot.
-                    .padding(.leading, Self.dotColumn + Self.headerSpacing)
+                // at Menlo 11, this spacing, and the reload button's 12 pt row comes to
+                // 56 of the badge's 56 exactly (line heights measured, not assumed) —
+                // which is why that button is 12 pt here and not the 14 the front card
+                // uses. Anything larger needs a taller `Layout.badgeSize`: the card
+                // anchors its content to the top, so what does not fit is clipped away
+                // silently.
+                HStack(spacing: Self.headerSpacing) {
+                    Text(PathLabel.trail(of: run.cwd))
+                        .font(Typeface.small(9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        // From the front: a path that still does not fit loses the part
+                        // furthest from what it identifies.
+                        .truncationMode(.head)
+                        // Lined up with the command above rather than with the status dot,
+                        // so the two lines read as one block. Derived from the dot's column
+                        // and the header's spacing instead of measured off a screenshot.
+                        .padding(.leading, Self.dotColumn + Self.headerSpacing)
+                    Spacer(minLength: 6)
+                    // Under the ✕, which is where the pointer already is when the badge
+                    // is being tidied — and a full row apart from it, because the two
+                    // buttons mean opposite things.
+                    rerunButton
+                }
             } else {
                 output
             }
@@ -94,6 +106,9 @@ struct RunCard: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.red)
             }
+            // In front the reload sits beside the ✕; the badge puts it on its own
+            // row instead, where the header has no room to spare.
+            if !compact { rerunButton }
             closeButton
         }
     }
@@ -138,6 +153,32 @@ struct RunCard: View {
         .help(run.state == .running ? "stop and close" : "close")
         .accessibilityLabel(run.state == .running ? "Stop and close run" : "Close run")
     }
+
+    /// The same command, in the same directory, one click. It does not start it
+    /// directly — the model rescans and holds a hazardous command back for ⌘Enter,
+    /// exactly as if it had been typed.
+    ///
+    /// Shown on hover like the ✕ and only once the run has finished, but its space is
+    /// held in every state — so neither the pointer arriving nor the run ending
+    /// reflows the row under the pointer.
+    private var rerunButton: some View {
+        Button(action: onRerun) {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 9, weight: .bold))
+                // 12 pt in the badge, where the arithmetic above spends the last
+                // point of height; 14 in front, matching the ✕.
+                .frame(width: 14, height: compact ? 12 : 14)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .opacity(rerunOffered && hovering ? 1 : 0)
+        .allowsHitTesting(rerunOffered && hovering)
+        .help(compact ? "run again" : "run again (⌘R)")
+        .accessibilityLabel("Run again")
+    }
+
+    private var rerunOffered: Bool { run.state != .running }
 
     private var statusDot: some View {
         Group {

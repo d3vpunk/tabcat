@@ -237,6 +237,11 @@ final class Controller {
                     if let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }), digit >= 1, digit <= 9 {
                         return self.model.select(digit: digit) ? nil : event
                     }
+                    // By character and not by key code, for the same reason as the
+                    // digits: R is wherever the layout put it.
+                    if event.charactersIgnoringModifiers == "r" {
+                        return self.model.rerunForeground() ? nil : event
+                    }
                     switch Int(event.keyCode) {
                     case kVK_Return:
                         self.model.confirmPending()

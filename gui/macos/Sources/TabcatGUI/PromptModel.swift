@@ -181,6 +181,10 @@ final class PromptModel: ObservableObject {
         /// Carried through the confirmation so the badge can show it afterwards. Looked
         /// up once, when the command was submitted, rather than again on confirming.
         let handle: String
+        /// The run a reload replaces, if this confirmation came from one. Its card is
+        /// dropped only when the command actually starts — dropped with Escape instead,
+        /// the output it was about to replace is still on screen.
+        var replaces: UUID? = nil
     }
 
     /// Asks for the launcher back. Set by the Controller, which owns the window.
@@ -744,6 +748,9 @@ final class PromptModel: ObservableObject {
     func confirmPending() {
         guard let pending else { return }
         self.pending = nil
+        if let id = pending.replaces, let old = runs.first(where: { $0.id == id }) {
+            dismiss(old)
+        }
         start(command: pending.command, cwd: pending.cwd, handle: pending.handle)
     }
 
@@ -867,6 +874,53 @@ final class PromptModel: ObservableObject {
         run.terminate()
         if foregroundID == run.id { foregroundID = nil }
         runs.removeAll { $0 === run }
+    }
+
+    /// Runs a finished run's command again, where it originally ran.
+    ///
+    /// Through the same gate as Enter: rescanned, and a hazardous command waits for
+    /// ⌘Enter like a typed one — a reload is one click, which is exactly the accident
+    /// the confirmation exists to catch. No round trip though: the stored command is
+    /// already handle-expanded, and the handle came with it.
+    ///
+    /// Replace, not accumulate: the old card goes when the new run starts, or the rail
+    /// would fill with copies of the same command and evict real history.
+    ///
+    /// Only for a finished run. On a running one "again" is ambiguous — kill it first,
+    /// or run beside it? — and the button is not offered there either.
+    func rerun(_ run: Run) {
+        guard run.state != .running else { return }
+        // Same rule as submit: a held-back command must be answered, not buried
+        // under the next thing to start.
+        if pending != nil {
+            status = "⌘Enter to run it, Escape to drop it"
+            return
+        }
+        let hazards = HazardScan.scan(command: run.command, cwd: run.cwd)
+        if hazards.isEmpty {
+            dismiss(run)
+            start(command: run.command, cwd: run.cwd, handle: run.handle)
+        } else {
+            pending = PendingRun(
+                command: run.command, cwd: run.cwd, hazards: hazards, handle: run.handle,
+                replaces: run.id
+            )
+            status = "⌘Enter to run it, Escape to drop it"
+        }
+        // The new run goes to the front, and the front sits under the launcher — with
+        // the launcher hidden the panel has shrunk to the rail and the card would be
+        // clipped away. Same reason `bringToFront` reveals; the confirmation card
+        // lives in the launcher too.
+        if !launcherVisible { onReveal?() }
+    }
+
+    /// ⌘R: the front card again. False when nothing finished is in front, so the
+    /// keystroke falls through instead of being swallowed.
+    @discardableResult
+    func rerunForeground() -> Bool {
+        guard let run = foreground, run.state != .running else { return false }
+        rerun(run)
+        return true
     }
 
     /// Expands a magic-name handle to the command it stands for. The daemon owns

@@ -151,8 +151,9 @@ false alarm on `npm test` trains you to confirm without reading.
 | click a row | same as Enter on it |
 | ⌘Enter | confirm a command that was held back |
 | ⌘↓ | send the front card to the rail |
+| ⌘R | run the front card's command again — through the same hazard gate as Enter |
 | click a badge | bring it back to the front, launcher and all |
-| hover a card | reveals its close button — ✕, or stop when it is still running |
+| hover a card | reveals its buttons — ✕ (or stop while running), and ⟳ once it has finished: the same command again, in the same directory, replacing the card |
 | click a breadcrumb | go to that directory |
 
 The overlay's own key is configurable, because which combination is free is a

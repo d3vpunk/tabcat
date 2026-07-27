@@ -67,7 +67,8 @@ struct OverlayContent: View {
                 RunCard(
                     run: run,
                     compact: model.presentation(of: run) == .badge,
-                    onClose: { model.dismiss(run) }
+                    onClose: { model.dismiss(run) },
+                    onRerun: { model.rerun(run) }
                 )
                 // Size taken from the same rect as the position, so a card that had
                 // to shrink to fit the screen is also drawn at that size.
