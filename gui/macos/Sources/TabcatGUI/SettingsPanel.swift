@@ -51,8 +51,17 @@ private struct SettingRowView: View {
     let onSet: (String) -> Void
     let onReset: () -> Void
     /// Buffer for the text-field types; committed on Enter, not per keystroke —
-    /// half a hotkey is not a hotkey.
-    @State private var draft = ""
+    /// half a hotkey is not a hotkey. Seeded at init rather than in onAppear:
+    /// onAppear runs after the first frame, which rendered the placeholder for
+    /// one flash.
+    @State private var draft: String
+
+    init(row: SettingRow, onSet: @escaping (String) -> Void, onReset: @escaping () -> Void) {
+        self.row = row
+        self.onSet = onSet
+        self.onReset = onReset
+        self._draft = State(initialValue: row.value)
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -93,7 +102,6 @@ private struct SettingRowView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .onAppear { draft = row.value }
         .onChange(of: row.value) { _, value in draft = value }
     }
 
