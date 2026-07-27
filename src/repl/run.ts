@@ -5,11 +5,14 @@ import { appendName, namesFileFor, readNames } from '../engine/names-store.js';
 import { Predictor } from '../engine/predictor.js';
 import { detectShell } from '../engine/shell.js';
 import { appendHistory, compactHistory, defaultHistoryFile } from '../engine/store.js';
+import { SETTINGS, parseInput, specFor } from '../settings/schema.js';
+import { boolSetting, clearSetting, intSetting, readSettings, settingsFileFor, writeSetting } from '../settings/store.js';
 import { VERSION } from '../version.js';
 import { ReplOutput, promptOnce, showReplHelp, showReplOutput } from './app.js';
 import { ShellSnapshot, execute, warmShellSnapshot } from './executor.js';
 import { realFs } from './real-fs.js';
 import { showMeowAnimation } from './meow.js';
+import { showSettingsEditor } from './settings-ui.js';
 import { calculateReplStats } from './stats.js';
 
 export interface ReplCommandContext {
@@ -17,19 +20,28 @@ export interface ReplCommandContext {
   historyFile: string;
   entries: readonly HistoryEntry[];
   names?: readonly MagicName[];
+  /** Called after `:settings` wrote the file — the loop re-reads and the next prompt renders with the new values. */
+  onSettingsChanged?: () => void;
   showHelp?: () => void;
   showOutput?: (output: ReplOutput) => void;
   clear?: () => void;
 }
 
-export type ReplCommandResult = 'unhandled' | 'handled' | 'meow' | 'exit';
+export type ReplCommandResult = 'unhandled' | 'handled' | 'meow' | 'settings-ui' | 'exit';
 
 export function handleReplCommand(line: string, context: ReplCommandContext): ReplCommandResult {
   // Colon is the single magic prefix — a leading '/' collides with absolute
   // paths and had no dropdown hints, so ':' is the only recognized form.
-  const command = /^:(\w+)$/.exec(line)?.[1];
+  const parsed = /^:(\w+)(?:\s+(\S.*))?$/.exec(line);
+  const command = parsed?.[1];
+  const rest = parsed?.[2];
+  // Only `:settings` takes arguments. `:help foo` stays unhandled (and fails
+  // in the shell) exactly as before — no silent reinterpretation.
+  if (rest !== undefined && command !== 'settings') return 'unhandled';
   const showOutput = context.showOutput ?? showReplOutput;
   switch (command) {
+    case 'settings':
+      return handleSettingsCommand(rest, context, showOutput);
     case 'help':
       (context.showHelp ?? showReplHelp)();
       return 'handled';
@@ -79,6 +91,76 @@ export function handleReplCommand(line: string, context: ReplCommandContext): Re
     default:
       return 'unhandled';
   }
+}
+
+/**
+ * Bare `:settings` — interactive editor (the loop runs it as its own Ink
+ * session), `:settings list` — static table, `:settings <key>` — show one,
+ * `:settings <key> <value>` — set, `:settings reset <key>` — back to the
+ * default. Same schema, same validation, same file as `tabcat settings`; the
+ * key/value completion in the dropdown comes from settingsHints (app.tsx).
+ */
+function handleSettingsCommand(
+  rest: string | undefined,
+  context: ReplCommandContext,
+  showOutput: (output: ReplOutput) => void,
+): 'handled' | 'settings-ui' {
+  const file = settingsFileFor(context.historyFile);
+  const note = (lines: string[], error = false): 'handled' => {
+    showOutput({ kind: 'note', title: 'settings', lines, ...(error ? { error } : {}) });
+    return 'handled';
+  };
+  const tokens = rest === undefined ? [] : rest.split(/\s+/);
+  const [first, second, ...extra] = tokens;
+
+  if (first === undefined) return 'settings-ui';
+
+  if (first === 'list' && second === undefined) {
+    const current = readSettings(file);
+    showOutput({
+      kind: 'settings',
+      rows: SETTINGS.map((spec) => ({
+        key: spec.key,
+        value: String(current.values.get(spec.key)),
+        isDefault: !current.overridden.has(spec.key),
+        live: spec.appliesLive,
+        description: spec.description,
+      })),
+    });
+    return 'handled';
+  }
+
+  if (first === 'reset') {
+    if (second === undefined || extra.length > 0) return note(['usage: :settings reset <key>'], true);
+    const spec = specFor(second);
+    if (spec === undefined) return note([`unknown setting: ${second}`], true);
+    try {
+      clearSetting(file, second);
+    } catch (error) {
+      return note([error instanceof Error ? error.message : String(error)], true);
+    }
+    context.onSettingsChanged?.();
+    return note([`${second} = ${spec.default} (default)`]);
+  }
+
+  const spec = specFor(first);
+  if (spec === undefined) return note([`unknown setting: ${first} — :settings lists all keys`], true);
+
+  if (second === undefined) {
+    const current = readSettings(file);
+    const suffix = current.overridden.has(first) ? '' : ' (default)';
+    return note([`${first} = ${current.values.get(first)}${suffix}`, spec.description]);
+  }
+
+  const value = parseInput(spec, [second, ...extra].join(' '));
+  if (!value.ok) return note([`${first}: ${value.error}`], true);
+  try {
+    writeSetting(file, first, value.value);
+  } catch (error) {
+    return note([error instanceof Error ? error.message : String(error)], true);
+  }
+  context.onSettingsChanged?.();
+  return note([`${first} = ${value.value}${spec.appliesLive ? '' : ' — takes effect at the next start'}`]);
 }
 
 export interface ReplOptions {
@@ -150,6 +232,11 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
   let cwd = process.cwd();
   let lastExitCode: number | undefined;
   let historyWritable = true;
+  // Settings are re-read after every `:settings` write — the next prompt
+  // renders with the new values, no restart. Warnings print once at startup.
+  const settingsFile = settingsFileFor(historyFile);
+  let settings = readSettings(settingsFile);
+  for (const warning of settings.warnings) console.error(`tabcat: ${warning}`);
 
   for (;;) {
     const result = await promptOnce({
@@ -159,6 +246,8 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
       historyLines,
       lastExitCode,
       minimal: options.minimal ?? false,
+      dropdownRows: intSetting(settings, 'repl.dropdownRows'),
+      footer: boolSetting(settings, 'repl.footer'),
       ...(magicEnabled
         ? {
             names: nameIndex,
@@ -177,10 +266,26 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
     const line = result.line.trim();
     if (line === '') continue;
     if (line === 'exit') break;
-    const replCommand = handleReplCommand(line, { cwd, historyFile, entries, names: nameIndex.all() });
+    const replCommand = handleReplCommand(line, {
+      cwd,
+      historyFile,
+      entries,
+      names: nameIndex.all(),
+      onSettingsChanged: () => {
+        settings = readSettings(settingsFile);
+      },
+    });
     if (replCommand === 'exit') break;
     if (replCommand === 'meow') {
       await showMeowAnimation();
+      continue;
+    }
+    if (replCommand === 'settings-ui') {
+      // Own Ink session between two prompts, meow-style. The editor writes
+      // through on every change; re-reading here makes the next prompt
+      // render with whatever it left behind.
+      await showSettingsEditor(settingsFile);
+      settings = readSettings(settingsFile);
       continue;
     }
     if (replCommand === 'handled') continue;

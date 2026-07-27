@@ -6,6 +6,7 @@ import { HandleIssue, NameIndex, handleIssue } from '../engine/names.js';
 import { fuzzySearch } from './history-search.js';
 import { nextBoundary } from './text-nav.js';
 import { HandlerContext, KeyEvent, KeyOutcome, PromptState, enterPasteMode, handleKey, initialPromptState } from './prompt-state.js';
+import { SETTINGS, specFor } from '../settings/schema.js';
 import { ReplStats } from './stats.js';
 
 const DROPDOWN_ROWS = 5;
@@ -44,6 +45,13 @@ export interface PromptOptions {
    * Search, paste mode, naming badge and `:`-hints render as in full mode.
    */
   minimal?: boolean | undefined;
+  /** Dropdown height in rows (`repl.dropdownRows`). Minimal mode stays at 1. */
+  dropdownRows?: number | undefined;
+  /**
+   * false (`repl.footer`): the key-hint legend disappears like in minimal
+   * mode — paste/search hints stay, they ARE the mode UI, not key help.
+   */
+  footer?: boolean | undefined;
 }
 
 type CompletionCounters = Omit<CompletionTelemetry, 'durationMs'>;
@@ -77,6 +85,7 @@ const HELP_COMMANDS = [
   [':help', 'This help'],
   [':history', 'Last 10 commands'],
   [':names', 'Learned magic names'],
+  [':settings', 'Show and change settings'],
   [':stats', 'History overview'],
   [':version', 'tabcat version'],
   [':cwd', 'Working directory'],
@@ -91,8 +100,38 @@ const MAGIC_COMMANDS = HELP_COMMANDS.map(([label, description]) => ({
 }));
 
 export function magicCommandHints(line: string): readonly { command: string; description: string }[] | null {
-  if (!/^:\w*$/.test(line)) return null;
-  return MAGIC_COMMANDS.filter(({ command }) => command.startsWith(line));
+  if (/^:\w*$/.test(line)) return MAGIC_COMMANDS.filter(({ command }) => command.startsWith(line));
+  // `:settings` completes its arguments too: keys, then values (bool/enum).
+  // Rendered from the schema — a new setting shows up here by itself.
+  if (/^:settings\s/.test(line)) return settingsHints(line);
+  return null;
+}
+
+function settingsHints(line: string): readonly { command: string; description: string }[] {
+  const tokens = line.split(/\s+/).filter((token) => token !== '').slice(1);
+  const current = /\s$/.test(line) ? '' : (tokens.pop() ?? '');
+  // Completing the CURRENT token in place preserves the user's exact spacing —
+  // `command` must extend the typed line for magicCandidates' insert slice.
+  const suggest = (words: readonly { word: string; description: string }[]) =>
+    words
+      .filter(({ word }) => word.startsWith(current) && word !== current)
+      .map(({ word, description }) => ({ command: line.slice(0, line.length - current.length) + word, description }));
+  const keys = SETTINGS.map((spec) => ({ word: spec.key, description: spec.description }));
+
+  if (tokens.length === 0) return suggest([...keys, { word: 'reset', description: 'Reset a setting to its default' }]);
+  if (tokens.length === 1 && tokens[0] === 'reset') return suggest(keys);
+  if (tokens.length === 1) {
+    const spec = specFor(tokens[0] as string);
+    if (spec === undefined) return [];
+    if (spec.type === 'bool') {
+      return suggest([
+        { word: 'true', description: spec.label },
+        { word: 'false', description: spec.label },
+      ]);
+    }
+    if (spec.type === 'enum') return suggest(spec.options.map((option) => ({ word: option, description: spec.label })));
+  }
+  return [];
 }
 
 /**
@@ -158,7 +197,13 @@ export type ReplOutput =
   | { kind: 'names'; names: readonly { name: string; line: string; active: boolean }[] }
   | { kind: 'stats'; stats: ReplStats; historyFile: string }
   | { kind: 'version'; version: string }
-  | { kind: 'cwd'; cwd: string };
+  | { kind: 'cwd'; cwd: string }
+  | {
+      kind: 'settings';
+      rows: readonly { key: string; value: string; isDefault: boolean; live: boolean; description: string }[];
+    }
+  /** Short confirmation or error from a `:` command — one panel, a few lines. */
+  | { kind: 'note'; title: string; lines: readonly string[]; error?: boolean };
 
 export function ReplOutputPanel({ output }: { output: ReplOutput }) {
   const contentWidth = Math.max(32, (process.stdout.columns ?? 80) - 7);
@@ -226,10 +271,38 @@ export function ReplOutputPanel({ output }: { output: ReplOutput }) {
       return <MagicPanel title="version"><Text color="cyan" bold>v{output.version}</Text></MagicPanel>;
     case 'cwd':
       return <MagicPanel title="cwd"><Text color="cyan">{truncateMiddle(singleLine(output.cwd), contentWidth)}</Text></MagicPanel>;
+    case 'settings': {
+      const keyWidth = Math.max(...output.rows.map((row) => row.key.length)) + 2;
+      const valueWidth = Math.max(7, ...output.rows.map((row) => row.value.length)) + 2;
+      return (
+        <MagicPanel title="settings">
+          {output.rows.map((row) => (
+            <Box key={row.key}>
+              <Box width={keyWidth}><Text color="cyan">{row.key}</Text></Box>
+              <Box width={valueWidth}>
+                {row.isDefault ? <Text dimColor>{row.value}</Text> : <Text color="magenta" bold>{row.value}</Text>}
+              </Box>
+              <Text dimColor>{truncateEnd(row.description + (row.live ? '' : ' (next start)'), contentWidth - keyWidth - valueWidth)}</Text>
+            </Box>
+          ))}
+          {output.rows.some((row) => !row.isDefault) && <Text dimColor>highlighted: changed from the default</Text>}
+          <Text> </Text>
+          <Text dimColor>:settings {'<key>'} {'<value>'} sets · :settings reset {'<key>'} restores the default</Text>
+        </MagicPanel>
+      );
+    }
+    case 'note':
+      return (
+        <MagicPanel title={output.title}>
+          {output.lines.map((line) => (
+            <Text key={line} {...(output.error === true ? { color: 'red' } : {})}>{truncateEnd(singleLine(line), contentWidth)}</Text>
+          ))}
+        </MagicPanel>
+      );
   }
 }
 
-function MagicPanel({ title, subtitle, children }: React.PropsWithChildren<{ title: string; subtitle?: string }>) {
+export function MagicPanel({ title, subtitle, children }: React.PropsWithChildren<{ title: string; subtitle?: string }>) {
   return (
     <Box flexDirection="column">
       <Text> </Text>
@@ -344,7 +417,7 @@ interface AppProps extends PromptOptions {
   onDone: (result: PromptResult) => void;
 }
 
-function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, minimal = false, onDone }: AppProps) {
+function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, minimal = false, dropdownRows: dropdownRowsSetting = DROPDOWN_ROWS, footer = true, onDone }: AppProps) {
   const { exit } = useApp();
   const { internal_eventEmitter } = useStdin();
 
@@ -377,7 +450,10 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
   const selectedIndex = Math.min(selected, Math.max(0, candidates.length - 1));
   // Minimal variant: exactly one dropdown row — the window degenerates to
   // the selected candidate, the counter moves inline into that row.
-  const dropdownRows = minimal ? 1 : DROPDOWN_ROWS;
+  const dropdownRows = minimal ? 1 : dropdownRowsSetting;
+  // repl.footer=false borrows minimal's legend rule: key help disappears,
+  // paste/search hints stay — they are the mode UI, not key help.
+  const legendCompact = minimal || !footer;
   // Center-anchored: selected stays centered in the window, except at the start/end.
   // This way the window scrolls along smoothly instead of jumping only when selected
   // reaches the bottom edge — and ↑/↓ indicators appear fluidly.
@@ -721,14 +797,14 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
                 </Text>
               );
             })}
-            {!minimal && candidates.length > DROPDOWN_ROWS && (
+            {!minimal && candidates.length > dropdownRows && (
               <Text dimColor>{selectedIndex + 1}/{candidates.length}</Text>
             )}
           </Box>
         )
       )}
 
-      {naming === null && legendVisible(minimal, {
+      {naming === null && legendVisible(legendCompact, {
         pasted,
         searchQuery,
         discoveryHandle,
@@ -742,7 +818,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
           {discoveryHandle !== null && <Text> </Text>}
           {/* Minimal keeps the legend only for paste/search (their hints ARE
               the mode UI) — the discovery badge stands alone without key help. */}
-          {(!minimal || pasted !== null || searchQuery !== null) && (
+          {(!legendCompact || pasted !== null || searchQuery !== null) && (
             <Text dimColor>
               {pasted !== null
                 ? '🐱 multiline paste · enter: run as pasted · esc: discard'
@@ -791,13 +867,14 @@ export function clampMinimalDisplay(display: string, columns: number, overheadCo
 }
 
 /**
- * Bottom line in the minimal variant: gone in the default state (budget:
- * prompt + max one extra line). It stays for paste/search — their hints are
- * the mode UI — and for the discovery badge, but only when the one-line
- * budget below the prompt is not already spent on the dropdown or `:`-hints.
+ * Bottom line in a compact prompt (minimal variant, or `repl.footer` off):
+ * gone in the default state (budget: prompt + max one extra line). It stays
+ * for paste/search — their hints are the mode UI — and for the discovery
+ * badge, but only when the one-line budget below the prompt is not already
+ * spent on the dropdown or `:`-hints.
  */
 export function legendVisible(
-  minimal: boolean,
+  compact: boolean,
   state: {
     pasted: string | null;
     searchQuery: string | null;
@@ -806,7 +883,7 @@ export function legendVisible(
     dropdownOpen: boolean;
   },
 ): boolean {
-  if (!minimal) return true;
+  if (!compact) return true;
   if (state.pasted !== null || state.searchQuery !== null) return true;
   return state.discoveryHandle !== null && state.magicHints === null && !state.dropdownOpen;
 }
