@@ -13,7 +13,7 @@ const SPECS: readonly SettingSpec[] = [
   { key: 'repl.dropdownRows', type: 'int', default: 5, min: 1, max: 20, label: 'Rows', description: 'rows', appliesLive: true },
   { key: 'repl.footer', type: 'bool', default: true, label: 'Footer', description: 'footer', appliesLive: true },
   { key: 'gui.theme', type: 'enum', default: 'auto', options: ['auto', 'light', 'dark'], label: 'Theme', description: 'theme', appliesLive: true },
-  { key: 'gui.hotkey', type: 'hotkey', default: 'opt space', label: 'Hotkey', description: 'hotkey', appliesLive: false },
+  { key: 'gui.hotkey', type: 'string', default: 'opt space', label: 'Hotkey', description: 'hotkey', appliesLive: false },
 ];
 
 /** Editor state over the fake schema, all defaults — tests never touch a real file. */
@@ -115,7 +115,7 @@ describe('settings editor state machine', () => {
   });
 
   it('an invalid commit shows the expectation and keeps editing; the next key clears the error', () => {
-    // string/hotkey accept everything today, so the failing validator is
+    // string accepts everything today, so the failing validator is
     // pinned through a synthetic edit buffer on a bool spec — the rule must
     // hold for every future type that edits inline.
     const boolOnly: readonly SettingSpec[] = [SPECS[1] as SettingSpec];

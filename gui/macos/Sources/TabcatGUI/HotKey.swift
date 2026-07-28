@@ -81,6 +81,18 @@ struct HotKeyCombo {
         self.init(keyCode: key.code, carbonModifiers: carbon, held: held, description: symbols + key.label)
     }
 
+    /// The schema option that means the same combination as a legacy string —
+    /// `cmd ctrl s` and `ctrl cmd s` are one hotkey in two spellings, so the
+    /// match compares the parsed combination, not the text. nil when the legacy
+    /// string does not parse or means none of the options.
+    static func matchingOption(for legacy: String, in options: [String]) -> String? {
+        guard let combo = HotKeyCombo(legacy) else { return nil }
+        return options.first { option in
+            guard let candidate = HotKeyCombo(option) else { return false }
+            return candidate.keyCode == combo.keyCode && candidate.carbonModifiers == combo.carbonModifiers
+        }
+    }
+
     /// Virtual key codes are positions, not characters, and this table is the ANSI
     /// layout. Every letter sits in the same place on QWERTZ except `y` and `z`,
     /// which are swapped — worth knowing before binding one of those two.

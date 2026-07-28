@@ -14,7 +14,7 @@ export interface SettingsUiState {
   readonly values: ReadonlyMap<string, SettingValue>;
   readonly overridden: ReadonlySet<string>;
   readonly selected: number;
-  /** null = navigating; otherwise the edit buffer of the selected string/hotkey row. */
+  /** null = navigating; otherwise the edit buffer of the selected string row. */
   readonly editing: string | null;
   readonly error: string | null;
   readonly done: boolean;
@@ -97,8 +97,7 @@ export function handleSettingsUiKey(state: SettingsUiState, input: string, key: 
       const next = spec.options[(index + direction + spec.options.length) % spec.options.length] as string;
       return write(base, spec, next);
     }
-    case 'string':
-    case 'hotkey': {
+    case 'string': {
       if (key.return === true) return { state: { ...base, editing: String(base.values.get(spec.key)) } };
       return { state: base };
     }

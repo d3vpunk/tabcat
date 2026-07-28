@@ -21,7 +21,6 @@ function controlHint(spec: SettingSpec, editing: boolean): string {
     case 'enum':
       return '←/→: next option';
     case 'string':
-    case 'hotkey':
       return 'enter: edit';
   }
 }

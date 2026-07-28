@@ -112,6 +112,30 @@ enum Check {
             ok = false
         }
 
+        // The hotkey options travel over the wire (the schema is TypeScript);
+        // an option this build cannot parse would be offered in the panel and
+        // then silently fall back to ⌥Space. The matcher itself is pinned in
+        // --tables; this is the cross-language half.
+        do {
+            let rows = try await client.settingsList()
+            if let hotkeyRow = rows.first(where: { $0.key == "gui.hotkey" }) {
+                let broken = hotkeyRow.options.filter { HotKeyCombo($0) == nil }
+                if hotkeyRow.options.isEmpty {
+                    line(true, "settings: gui.hotkey = \(hotkeyRow.value), no option list — daemon predates the fixed choices (`tabcat daemon stop`)")
+                } else {
+                    line(broken.isEmpty, broken.isEmpty
+                        ? "settings: gui.hotkey = \(hotkeyRow.value), all \(hotkeyRow.options.count) options parse"
+                        : "settings: options this build cannot parse: \(broken.joined(separator: ", "))")
+                    if !broken.isEmpty { ok = false }
+                }
+            } else {
+                line(true, "settings: no gui.hotkey row — daemon predates it")
+            }
+        } catch {
+            line(false, "settings: \(error)")
+            ok = false
+        }
+
         // The history section, over the wire, because the table above cannot see the
         // wire. `names list` was the lesson: a short field count comes back `bad_fields`,
         // and a method that treats any failure as "nothing found" reports an empty
@@ -222,7 +246,43 @@ enum Check {
         if !suggestions() { ok = false }
         if !layout() { ok = false }
         if !bootSettings() { ok = false }
+        if !hotkeyMigration() { ok = false }
         return ok ? 0 : 1
+    }
+
+    /// The legacy-hotkey migration's matcher, as a table: `defaults write …
+    /// hotkey` spellings against the schema's option list. The options here
+    /// mirror src/settings/schema.ts — at runtime the wire is authoritative,
+    /// and `--check` verifies the live list parses; this pins the matching.
+    private static func hotkeyMigration() -> Bool {
+        let options = ["opt space", "ctrl opt space", "cmd shift space", "ctrl cmd s"]
+        let cases: [(legacy: String, expected: String?, why: String)] = [
+            ("ctrl cmd s", "ctrl cmd s", "exact spelling"),
+            ("cmd ctrl s", "ctrl cmd s", "word order does not matter"),
+            ("control command s", "ctrl cmd s", "long spellings"),
+            ("opt space", "opt space", "the default maps to itself"),
+            ("alt space", "opt space", "alt is opt"),
+            ("ctrl cmd k", nil, "a combination outside the list stays legacy"),
+            ("garbage", nil, "unparseable stays legacy"),
+            ("space", nil, "no modifier is not a hotkey"),
+        ]
+
+        var wrong: [String] = []
+        for probe in cases {
+            let got = HotKeyCombo.matchingOption(for: probe.legacy, in: options)
+            if got != probe.expected {
+                wrong.append("\(probe.why): \"\(probe.legacy)\" -> \(got ?? "nil"), expected \(probe.expected ?? "nil")")
+            }
+        }
+        // Every option must parse — one that does not would be offered in the
+        // panel and then silently fall back to ⌥Space at the next start.
+        for option in options where HotKeyCombo(option) == nil {
+            wrong.append("option does not parse: \(option)")
+        }
+
+        line(wrong.isEmpty, "hotkey migration: \(cases.count - wrong.count)/\(cases.count) match cases, \(options.count) options parse")
+        for problem in wrong { print("        \(problem)") }
+        return wrong.isEmpty
     }
 
     /// BootSettings' reading of settings.json, as a table — it mirrors the

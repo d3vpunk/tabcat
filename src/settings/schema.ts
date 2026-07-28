@@ -37,8 +37,7 @@ export type SettingSpec =
       readonly step?: number;
     })
   | (SettingBase & { readonly type: 'enum'; readonly default: string; readonly options: readonly string[] })
-  | (SettingBase & { readonly type: 'string'; readonly default: string })
-  | (SettingBase & { readonly type: 'hotkey'; readonly default: string });
+  | (SettingBase & { readonly type: 'string'; readonly default: string });
 
 export const SETTINGS: readonly SettingSpec[] = [
   {
@@ -77,10 +76,15 @@ export const SETTINGS: readonly SettingSpec[] = [
   },
   {
     key: 'gui.hotkey',
-    type: 'hotkey',
+    type: 'enum',
     default: 'opt space',
+    // A fixed list rather than free text: a typo in a free-text hotkey is a
+    // launcher nobody can open, and the safe combinations are few anyway —
+    // ⌃⌘Space is the emoji picker, ⌃Space switches input sources, ⌘Space is
+    // Spotlight. Every entry parses in HotKeyCombo; --tables pins that.
+    options: ['opt space', 'ctrl opt space', 'cmd shift space', 'ctrl cmd s'],
     label: 'Overlay hotkey',
-    description: 'The global shortcut that opens the overlay, e.g. "opt space" or "ctrl cmd s".',
+    description: 'The global shortcut that opens the overlay.',
     appliesLive: false,
   },
 ];
@@ -108,7 +112,6 @@ export function validateValue(spec: SettingSpec, value: unknown): Validated {
       if (typeof value === 'string' && spec.options.includes(value)) return { ok: true, value };
       return { ok: false, error: `expected one of: ${spec.options.join(', ')}` };
     case 'string':
-    case 'hotkey':
       if (typeof value === 'string') return { ok: true, value };
       return { ok: false, error: 'expected a string' };
   }
@@ -129,7 +132,6 @@ export function parseInput(spec: SettingSpec, raw: string): Validated {
       return { ok: false, error: `expected an integer between ${spec.min} and ${spec.max}` };
     case 'enum':
     case 'string':
-    case 'hotkey':
       return validateValue(spec, raw);
   }
 }

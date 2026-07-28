@@ -182,23 +182,32 @@ The overlay's own key is configurable, because which combination is free is a
 property of a machine and not of this program — ⌥Space is what Alfred and Raycast
 take by default, and a launcher whose trigger is already owned opens two windows.
 
+It is the `gui.hotkey` setting: a fixed list of combinations in the gear panel,
+in the REPL's `:settings` and on the CLI — not a free-text field, because a typo
+in a free-text hotkey is a launcher nobody can open, and the safe combinations
+are few anyway. ⌃⌘Space is the Emoji picker, ⌃Space switches input sources,
+⌘Space is Spotlight; the list stays clear of all three, and `--tables` pins that
+every entry it offers actually parses.
+
 ```sh
-defaults write nl.d3vpunk.tabcat.gui hotkey "ctrl cmd s"   # the bundled app
-TABCAT_HOTKEY="ctrl cmd s" swift run TabcatGUI             # a development run
+TABCAT_HOTKEY="ctrl cmd s" swift run TabcatGUI   # a development run; overrides the setting
 ```
 
-Both exist because neither reaches the other: an app started from the Finder inherits
-no environment, and a bare `swift run` has a different defaults domain than the
-bundle. `--check` prints whichever one is in force.
+The environment variable stays free-form (words in any order, one non-modifier
+key: `cmd`, `ctrl`, `opt`/`alt`, `shift`, plus `space`, `escape`, `return`,
+`tab`, a letter or a digit) and exists because an app started from the Finder
+inherits no environment while a development run has no bundle. Anything
+unparseable falls back to ⌥Space rather than leaving no way in at all. `--check`
+prints whichever combination is in force.
 
-Words in any order, one non-modifier key: `cmd`, `ctrl`, `opt`/`alt`, `shift`, plus
-`space`, `escape`, `return`, `tab`, a letter or a digit. Anything unparseable falls
-back to ⌥Space rather than leaving no way in at all.
+The pre-0.6 spelling, `defaults write nl.d3vpunk.tabcat.gui hotkey …`, is
+migrated at launch: a stored combination that means one of the list's entries
+moves into settings.json and the legacy key is deleted; one outside the list
+keeps working from where it is, it just cannot be shown as a selected row.
 
 Whatever the combination is, its modifiers are the hold-to-cycle chord: the table
 above says ⌥ because that is the default, but with `ctrl cmd s` it is ⌃⌘ that is held
-and `s` that steps to the next directory. Two neighbours to avoid: **⌃⌘Space is the
-Emoji picker** and ⌃Space switches input sources.
+and `s` that steps to the next directory.
 
 The ⌥Space double meaning is deliberate and is why `Controller` tracks whether ⌥
 has been held continuously since the overlay appeared: the hotkey *is* ⌥Space, so

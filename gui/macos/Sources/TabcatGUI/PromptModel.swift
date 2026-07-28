@@ -301,6 +301,7 @@ final class PromptModel: ObservableObject {
                 await seedDirectories(reason: "no daemon")
                 return
             }
+            await migrateLegacyHotkey(client)
             await loadDirectories(client)
         }
     }
@@ -1101,6 +1102,37 @@ final class PromptModel: ObservableObject {
                 settingsNote = describe(error)
             }
         }
+    }
+
+    /// One-time move of the legacy `defaults write … hotkey` into settings.json,
+    /// at connect rather than when the gear opens: the gear panel edits the file,
+    /// so two stores answering one question showed the schema default while the
+    /// legacy combination was the one in force. Only when the file has no value
+    /// yet, and only when the legacy string means one of the schema's options —
+    /// otherwise the legacy chain keeps deciding at startup and the row keeps
+    /// showing the default. The legacy key is deleted afterwards: were it kept,
+    /// a reset in the panel would silently re-migrate it at the next start,
+    /// and reset means default.
+    private func migrateLegacyHotkey(_ client: DaemonClient) async {
+        let defaults = UserDefaults.standard
+        guard let legacy = defaults.string(forKey: "hotkey") else { return }
+        guard let rows = try? await client.settingsList(),
+              let row = rows.first(where: { $0.key == "gui.hotkey" }),
+              !row.options.isEmpty
+        else { return }
+        if !row.overridden {
+            // Unmatched (a combination outside the fixed list) or the write
+            // failed: keep the legacy key — it is what makes that combination
+            // work at all, and deleting it would change the hotkey underfoot.
+            guard let option = HotKeyCombo.matchingOption(for: legacy, in: row.options),
+                  (try? await client.settingsSet(key: "gui.hotkey", value: option)) != nil
+            else { return }
+            Log.app.info("hotkey migrated from defaults: \(legacy, privacy: .public) -> \(option, privacy: .public)")
+        }
+        // Migrated — or the file already had a value that outranks it. Either
+        // way the file is the store now, and the stale key would only
+        // shadow-resurrect on some future reset, where reset means default.
+        defaults.removeObject(forKey: "hotkey")
     }
 
     private func describe(_ error: Error) -> String {
