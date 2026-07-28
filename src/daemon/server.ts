@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Server, Socket, createServer } from 'node:net';
 import { FsLike } from '../engine/fs-completer.js';
 import { RankedCandidate } from '../engine/predictor.js';
@@ -39,6 +40,12 @@ export interface DaemonOptions {
    * it to the caller — both exist for tests.
    */
   build?: 'sync' | 'deferred' | 'manual';
+  /**
+   * The file the update self-check watches; defaults to this module itself.
+   * Exists for tests, which touch a temp file instead of rewriting the
+   * daemon's own source under a running test runner.
+   */
+  selfFile?: string;
   onWarn?: (message: string) => void;
 }
 
@@ -77,6 +84,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
    *  `busy` reply but never hung up. */
   const sockets = new Set<Socket>();
   const pidfile = pidfileFor(options.historyFile);
+
+  // The daemon outlives `npm i -g`: the process keeps serving OLD code while
+  // every fresh client expects the new one (a `forget` against a daemon that
+  // predates the op). Watching our own module file turns the update into a
+  // graceful shutdown — plugin and GUI spawn a fresh daemon on the next
+  // request anyway. An unreadable file at START disables the check ('' stays
+  // ''); unreadable LATER counts as changed, because a module file vanishing
+  // is what an npm update looks like from the inside.
+  const selfFile = options.selfFile ?? fileURLToPath(import.meta.url);
+  const selfSignature = fileSignature(selfFile);
 
   let lastActivity = Date.now();
   let closing = false;
@@ -195,6 +212,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // timeout.
       if (socketIno !== -1 && inoOf(socketPath) !== socketIno) {
         options.onWarn?.(`socket ${socketPath} is no longer ours — shutting down`);
+        void stop();
+        return;
+      }
+      // Same self-check, other direction: our code on disk was replaced.
+      if (selfSignature !== '' && fileSignature(selfFile) !== selfSignature) {
+        options.onWarn?.(`daemon code changed on disk (${selfFile}) — shutting down for the update`);
         void stop();
         return;
       }
@@ -491,6 +514,19 @@ const inoOf = (path: string): number => {
     return statSync(path).ino;
   } catch {
     return -1;
+  }
+};
+
+/**
+ * Identity of a file's content on disk. The inode catches npm's replace
+ * (unlink + write = new inode), mtime and size catch an in-place rewrite.
+ */
+const fileSignature = (path: string): string => {
+  try {
+    const stats = statSync(path);
+    return `${stats.ino}:${stats.mtimeMs}:${stats.size}`;
+  } catch {
+    return '';
   }
 };
 

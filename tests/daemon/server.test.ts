@@ -366,6 +366,37 @@ describe('daemon: names', () => {
   });
 });
 
+describe('daemon: update self-check', () => {
+  it('shuts down when its own code changes on disk', async () => {
+    const selfFile = join(dir, 'fake-server.js');
+    writeFileSync(selfFile, 'old build\n');
+    const warnings: string[] = [];
+    // 4s idle gives the fastest tick (max(1s, idle/4) = 1s), and the 2.5s
+    // timeout below expires well before the 4s idle stop could — so only the
+    // self-check can be what closes the daemon inside this window.
+    const handle = await daemon({ selfFile, idleTimeoutMs: 4_000, onWarn: (m) => warnings.push(m) });
+
+    writeFileSync(selfFile, 'new build, one byte longer\n');
+
+    await withTimeout(handle.closed, 2_500, 'daemon ignored the update');
+    expect(warnings.some((w) => w.includes('changed on disk'))).toBe(true);
+    expect(existsSync(socketPath)).toBe(false);
+  });
+
+  it('an untouched file keeps the daemon alive across ticks', async () => {
+    const selfFile = join(dir, 'fake-server.js');
+    writeFileSync(selfFile, 'stable build\n');
+    await daemon({ selfFile, idleTimeoutMs: 8_000 });
+    const client = await TestClient.connect(socketPath);
+
+    // Past at least one 2s tick (8s / 4), pinging in between so the idle
+    // deadline never comes close.
+    await new Promise((resolve) => setTimeout(resolve, 2_200));
+    expect((await client.request('ping'))[0]?.[0]).toBe('ok');
+    client.close();
+  });
+});
+
 describe('daemon: resilience', () => {
   it('answers with an error instead of dying when a file cannot be read', async () => {
     // handleLine runs inside a socket data callback: an uncaught throw there

@@ -321,18 +321,22 @@ The plugin is covered on three levels: the TSV wire format and the socket path a
 
 ## Updating
 
+Nothing to do: the daemon watches its own module file on disk and shuts
+down within a minute of an update replacing it — the next shell start or
+keystroke spawns a fresh one from the new code. `tabcat daemon status`
+shows which version is actually listening.
+
+One exception, once: a daemon started by a version **before** the
+self-check existed keeps running the old code until it idles out
+(45 minutes). Updating from such a version, end it by hand:
+
 ```sh
-tabcat daemon stop     # after every update
+tabcat daemon stop
 ```
 
-The daemon is a long-lived process running the code of whatever version
-started it, and it exits on its own only after 45 minutes idle. After an
-update the old one keeps answering: an op it does not know yet fails with
-`bad_op`, a protocol bump answers `bad_protocol` — the plugin then disables
-itself for the session and falls back to plain zsh rather than hang.
-`tabcat daemon stop` ends it; the next shell start or keystroke spawns a
-fresh one from the new code. `tabcat daemon status` shows which version is
-actually listening.
+While an old daemon is still answering, nothing hangs: an op it does not
+know yet fails with `bad_op`, a protocol bump answers `bad_protocol` — the
+plugin then disables itself for the session and falls back to plain zsh.
 
 History, names and settings files are carried forward unchanged — no
 migration on update.
