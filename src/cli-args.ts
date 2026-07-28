@@ -1,27 +1,71 @@
-export type CliCommand = 'repl' | 'import' | 'simulate' | 'stats' | 'names' | 'help' | 'version';
+export type CliCommand =
+  | 'repl'
+  | 'import'
+  | 'simulate'
+  | 'stats'
+  | 'names'
+  | 'settings'
+  | 'daemon'
+  | 'plugin'
+  | 'help'
+  | 'version';
 type DataCommand = Exclude<CliCommand, 'help' | 'version'>;
 
 export interface CliArgs {
   command: CliCommand;
+  /** Positional words after the command: `daemon status`, `plugin init zsh`. */
+  subs: string[];
   history?: string;
   file?: string;
   line?: string;
   cwd?: string;
+  socket?: string;
   now?: number;
   minimal?: boolean;
+  json?: boolean;
+  check?: boolean;
   commandHelp: boolean;
 }
 
-const COMMANDS = new Set<CliCommand>(['repl', 'import', 'simulate', 'stats', 'names', 'help']);
-const VALUE_OPTIONS = new Set(['history', 'file', 'line', 'cwd', 'now']);
-const FLAG_OPTIONS = new Set(['minimal']);
+const COMMANDS = new Set<CliCommand>(['repl', 'import', 'simulate', 'stats', 'names', 'settings', 'daemon', 'plugin', 'help']);
+const VALUE_OPTIONS = new Set(['history', 'file', 'line', 'cwd', 'now', 'socket']);
+const FLAG_OPTIONS = new Set(['minimal', 'json', 'check']);
 const ALLOWED_OPTIONS: Record<DataCommand, ReadonlySet<string>> = {
   repl: new Set(['history', 'minimal']),
   import: new Set(['history', 'file']),
-  simulate: new Set(['history', 'line', 'cwd', 'now']),
+  simulate: new Set(['history', 'line', 'cwd', 'now', 'json']),
   stats: new Set(['history']),
   names: new Set(['history']),
+  settings: new Set(['history']),
+  daemon: new Set(['history', 'socket']),
+  plugin: new Set(['check']),
 };
+
+/** Which positional words each command accepts after its own name. */
+const ALLOWED_SUBS: Partial<Record<DataCommand, readonly (readonly string[])[]>> = {
+  daemon: [[], ['status'], ['stop'], ['path']],
+  plugin: [['init'], ['init', 'zsh']],
+};
+
+/**
+ * `settings` subs carry free-form words (keys, values) — the fixed-word table
+ * above cannot express them, so only the shape is checked here. Whether a key
+ * exists is the schema's question and stays in cli.ts.
+ */
+const SETTINGS_VERB_ARITY: Record<string, number> = { list: 1, get: 2, set: 3, reset: 2 };
+
+function validateSettingsSubs(subs: readonly string[]): void {
+  if (subs.length === 0) return; // bare `settings` = list
+  const verb = subs[0] as string;
+  const arity = SETTINGS_VERB_ARITY[verb];
+  if (arity === undefined) {
+    throw new CliArgumentError(`Unknown settings subcommand: ${verb} (list|get|set|reset)`, 'settings');
+  }
+  if (subs.length !== arity) {
+    const shape = { list: 'list', get: 'get <key>', set: 'set <key> <value>', reset: 'reset <key>' }[verb];
+    throw new CliArgumentError(`settings ${verb} expects: settings ${shape}`, 'settings');
+  }
+}
 
 export class CliArgumentError extends Error {
   constructor(
@@ -38,6 +82,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
   let version = false;
   const values = new Map<string, string>();
   const flags = new Set<string>();
+  const subs: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i] as string;
@@ -50,9 +95,14 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
       continue;
     }
     if (!token.startsWith('-')) {
-      if (!COMMANDS.has(token as CliCommand)) throw new CliArgumentError(`Unknown command: ${token}`);
-      if (command !== undefined) throw new CliArgumentError(`Unexpected argument: ${token}`, command);
-      command = token as CliCommand;
+      if (command === undefined) {
+        if (!COMMANDS.has(token as CliCommand)) throw new CliArgumentError(`Unknown command: ${token}`);
+        command = token as CliCommand;
+      } else {
+        // Positional words after the command (`daemon stop`) — validated below,
+        // once we know which command they belong to.
+        subs.push(token);
+      }
       continue;
     }
 
@@ -75,18 +125,33 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
   }
 
   if (version) {
-    if (command !== undefined || commandHelp || values.size > 0 || flags.size > 0) {
+    if (command !== undefined || commandHelp || values.size > 0 || flags.size > 0 || subs.length > 0) {
       throw new CliArgumentError('--version cannot be combined with other arguments', command);
     }
-    return { command: 'version', commandHelp: false };
+    return { command: 'version', subs: [], commandHelp: false };
   }
 
   const resolvedCommand = command ?? (commandHelp ? 'help' : 'repl');
   if (resolvedCommand === 'help') {
     if (values.size > 0 || flags.size > 0) throw new CliArgumentError('help does not accept options', resolvedCommand);
-    return { command: 'help', commandHelp: false };
+    return { command: 'help', subs: [], commandHelp: false };
   }
   if (resolvedCommand === 'version') throw new CliArgumentError('version is not a command', resolvedCommand);
+
+  if (resolvedCommand === 'settings') {
+    validateSettingsSubs(subs);
+  } else {
+    const allowedSubs = ALLOWED_SUBS[resolvedCommand];
+    if (allowedSubs === undefined) {
+      const stray = subs[0];
+      if (stray !== undefined) throw new CliArgumentError(`Unexpected argument: ${stray}`, resolvedCommand);
+    } else if (!allowedSubs.some((allowed) => allowed.length === subs.length && allowed.every((word, i) => word === subs[i]))) {
+      throw new CliArgumentError(
+        subs.length === 0 ? `${resolvedCommand} needs a subcommand` : `Unexpected argument: ${subs.join(' ')}`,
+        resolvedCommand,
+      );
+    }
+  }
 
   for (const name of [...values.keys(), ...flags]) {
     if (!ALLOWED_OPTIONS[resolvedCommand].has(name)) {
@@ -102,6 +167,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
 
   const result: CliArgs = {
     command: resolvedCommand,
+    subs,
     commandHelp,
   };
   const history = values.get('history');
@@ -112,8 +178,12 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
   if (file !== undefined) result.file = file;
   if (line !== undefined) result.line = line;
   if (cwd !== undefined) result.cwd = cwd;
+  const socket = values.get('socket');
+  if (socket !== undefined) result.socket = socket;
   if (now !== undefined) result.now = now;
   if (flags.has('minimal')) result.minimal = true;
+  if (flags.has('json')) result.json = true;
+  if (flags.has('check')) result.check = true;
   return result;
 }
 
@@ -124,11 +194,17 @@ export function commandUsage(command: CliCommand): string {
     case 'import':
       return 'Usage: tabcat import [--file <path>] [--history <path>]';
     case 'simulate':
-      return 'Usage: tabcat simulate [--line <text>] [--cwd <dir>] [--now <ms>] [--history <path>]';
+      return 'Usage: tabcat simulate [--line <text>] [--cwd <dir>] [--now <ms>] [--history <path>] [--json]';
     case 'stats':
       return 'Usage: tabcat stats [--history <path>]';
     case 'names':
       return 'Usage: tabcat names [--history <path>]';
+    case 'settings':
+      return 'Usage: tabcat settings [list | get <key> | set <key> <value> | reset <key>] [--history <path>]';
+    case 'daemon':
+      return 'Usage: tabcat daemon [status|stop|path] [--history <path>] [--socket <path>]';
+    case 'plugin':
+      return 'Usage: tabcat plugin init zsh [--check]';
     case 'help':
       return 'Usage: tabcat help';
     case 'version':

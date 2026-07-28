@@ -181,3 +181,52 @@ describe('names: predictor integration', () => {
     );
   });
 });
+
+describe('NameIndex: prefix hint for the badge', () => {
+  const named = (name: string, line: string, ts = 1_000, cwds: string[] = []): MagicName => ({ name, line, cwds, ts });
+
+  it('finds a handle while the command is still being typed', () => {
+    // The plugin badge must appear early — waiting for the exact line means the
+    // user only learns about the shortcut after typing the whole command.
+    const index = new NameIndex([named('dep', 'docker compose up -d')]);
+    expect(index.handleForPrefix('docker com', '/w')).toBe('dep');
+    expect(index.handleForPrefix('docker compose up -d', '/w')).toBe('dep');
+  });
+
+  it('ignores a prefix shorter than the minimum', () => {
+    const index = new NameIndex([named('dep', 'docker compose up -d')]);
+    expect(index.handleForPrefix('d', '/w')).toBeNull();
+    expect(index.handleForPrefix('  ', '/w')).toBeNull();
+    expect(index.handleForPrefix('do', '/w')).toBe('dep');
+  });
+
+  it('does not match a different command', () => {
+    const index = new NameIndex([named('dep', 'docker compose up -d')]);
+    expect(index.handleForPrefix('git stat', '/w')).toBeNull();
+  });
+
+  it('is case sensitive — the badge must describe what Tab would insert', () => {
+    const index = new NameIndex([named('dep', 'Docker compose')]);
+    expect(index.handleForPrefix('docker', '/w')).toBeNull();
+    expect(index.handleForPrefix('Docker', '/w')).toBe('dep');
+  });
+
+  it('prefers the closest completion, newest on ties', () => {
+    const index = new NameIndex([
+      named('longer', 'deploy production with extra steps', 1_000),
+      named('shorter', 'deploy production', 2_000),
+    ]);
+    expect(index.handleForPrefix('deploy p', '/w')).toBe('shorter');
+  });
+
+  it('respects the cwd scope', () => {
+    const index = new NameIndex([named('dep', 'docker compose up -d', 1_000, ['/other'])]);
+    expect(index.handleForPrefix('docker com', '/w')).toBeNull();
+    expect(index.handleForPrefix('docker com', '/other')).toBe('dep');
+  });
+
+  it('tolerates leading whitespace in the typed line', () => {
+    const index = new NameIndex([named('dep', 'docker compose up -d')]);
+    expect(index.handleForPrefix('  docker com', '/w')).toBe('dep');
+  });
+});

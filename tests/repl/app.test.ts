@@ -212,7 +212,7 @@ describe('Stats text layout', () => {
 describe('Magic command hints', () => {
   it('shows all commands after a colon', () => {
     expect(magicCommandHints(':')?.map(({ command }) => command)).toEqual([
-      ':help', ':history', ':names', ':stats', ':version', ':cwd', ':clear', ':meow', ':exit',
+      ':help', ':history', ':names', ':settings', ':stats', ':version', ':cwd', ':clear', ':meow', ':exit',
     ]);
   });
 

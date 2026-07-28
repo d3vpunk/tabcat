@@ -51,6 +51,23 @@ export const DEFAULT_SCORING: ScoringConfig = {
   maxOccurrencesPerEdge: 64,
 };
 
+/**
+ * The time half of frecency: long-term decay plus a heavily weighted short-term
+ * term, without the cwd boost. Shared with the daemon's cwd index, which ranks
+ * directories by the same curve and has no directory to compare against.
+ */
+export function frecency(ts: number, now: number, config: ScoringConfig): number {
+  const ageMs = now - ts;
+  // Dated far in the future (broken clock during import): do not reward with
+  // maximal score — the entry would otherwise dominate for years.
+  if (ageMs < -MS_PER_DAY) return 0;
+  const ageDays = Math.max(0, ageMs) / MS_PER_DAY;
+  const ageHours = Math.max(0, ageMs) / MS_PER_HOUR;
+  const longTerm = Math.max(Math.pow(0.5, ageDays / config.halfLifeDays), config.frequencyFloor);
+  const shortTerm = config.shortWeight * Math.pow(0.5, ageHours / config.shortHalfLifeHours);
+  return longTerm + shortTerm;
+}
+
 /** Sentinel for "line ends here" — never emitted as a suggestion. */
 export const END = '\u0000END';
 
@@ -169,18 +186,7 @@ export class ChunkModel {
 
   /** Frecency: long-term decay + heavily weighted short-term decay, cwd boost. */
   private occurrenceScore(o: Occurrence, cwd: string, now: number): number {
-    const ageMs = now - o.ts;
-    // Dated far in the future (broken clock during import): do not reward
-    // with maximal score — the entry would otherwise dominate for years.
-    if (ageMs < -MS_PER_DAY) return 0;
-    const ageDays = Math.max(0, ageMs) / MS_PER_DAY;
-    const ageHours = Math.max(0, ageMs) / MS_PER_HOUR;
-    const longTerm = Math.max(
-      Math.pow(0.5, ageDays / this.config.halfLifeDays),
-      this.config.frequencyFloor,
-    );
-    const shortTerm = this.config.shortWeight * Math.pow(0.5, ageHours / this.config.shortHalfLifeHours);
     const boost = o.cwd !== null && o.cwd === cwd ? this.config.cwdBoost : 1;
-    return (longTerm + shortTerm) * boost;
+    return frecency(o.ts, now, this.config) * boost;
   }
 }

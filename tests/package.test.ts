@@ -20,6 +20,12 @@ describe('npm package', () => {
     expect(manifest.files).toEqual(['dist/', 'README.md', 'LICENSE']);
   });
 
+  it('copies the zsh plugin into dist on every build', () => {
+    // tsc only emits JavaScript, so without this step `tabcat plugin init zsh`
+    // would point at a file that is not in the published package.
+    expect(manifest.scripts?.['build']).toContain('copy-assets');
+  });
+
   it('links tabcat to the built CLI entry point', () => {
     expect(manifest.bin?.['tabcat']).toBe('dist/cli.js');
     expect(readFileSync(new URL('../src/cli.ts', import.meta.url), 'utf8')).toMatch(/^#!\/usr\/bin\/env node/);

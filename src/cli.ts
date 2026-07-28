@@ -7,10 +7,19 @@ import { Predictor } from './engine/predictor.js';
 import { detectShell } from './engine/shell.js';
 import { namesFileFor, readNames } from './engine/names-store.js';
 import { MAX_HISTORY_ENTRIES, appendHistory, dedupeImportEntries, defaultHistoryFile, readHistory } from './engine/store.js';
+import { AlreadyRunningError, startDaemon } from './daemon/server.js';
+import { pingDaemon, shutdownDaemon } from './daemon/client.js';
+import { SocketPathError, resolveSocketPath } from './daemon/paths.js';
+import { PROTOCOL_VERSION } from './daemon/protocol.js';
+import { checkEnvironment, defaultCheckDeps, formatCheck, initSnippet, pluginFilePath } from './plugin/init.js';
 import { realFs } from './repl/real-fs.js';
-import { runRepl } from './repl/run.js';
+import { SETTINGS, parseInput, specFor } from './settings/schema.js';
+import { clearSetting, readSettings, settingsFileFor, writeSetting } from './settings/store.js';
 import { VERSION } from './version.js';
 
+
+const isAddressInUse = (error: unknown): boolean =>
+  error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'EADDRINUSE';
 
 const readHistoryWithWarning = (file: string): HistoryEntry[] =>
   readHistory(file, (count) => console.error(`tabcat: skipped ${count} invalid history line(s) (${file}).`));
@@ -23,14 +32,19 @@ Usage: tabcat [command] [options]
 Commands:
   repl (default)  Start smart prompt
   import          Seed from shell history (zsh/bash, detected via $SHELL) [--file <path>]
-  simulate        Show ranking for a line: --line <str> [--cwd <dir>] [--now <ms>]
+  simulate        Show ranking for a line: --line <str> [--cwd <dir>] [--now <ms>] [--json]
   stats           History overview (entries, directories)
   names           List magic names (Ctrl-N shortcuts from the REPL)
+  settings        Show and change settings (list|get <key>|set <key> <value>|reset <key>)
+  daemon          Run the prediction daemon for the zsh plugin (status|stop|path)
+  plugin init zsh Print the .zshrc snippet for the zsh plugin [--check]
   help            This help
 
 Options:
   --history <path>  Alternative history path (default: ~/.config/tabcat/history.jsonl)
+  --socket <path>   Alternative daemon socket (default: $XDG_RUNTIME_DIR/tabcat/daemon.sock)
   --minimal         Compact prompt (repl): 1-row dropdown, no legend line
+  --json            Machine-readable output (simulate)
   --version         Print version
 
 Options may appear before or after the command. Command help: tabcat <command> --help
@@ -45,8 +59,9 @@ try {
 } catch (error) {
   if (!(error instanceof CliArgumentError)) throw error;
   console.error(`tabcat: ${error.message}`);
-  const commandHint = process.argv.slice(2).find((token) => ['repl', 'import', 'simulate', 'stats', 'names'].includes(token));
-  console.error(commandUsage(error.command ?? (commandHint as 'repl' | 'import' | 'simulate' | 'stats' | 'names' | undefined) ?? 'help'));
+  const known = ['repl', 'import', 'simulate', 'stats', 'names', 'daemon', 'plugin'] as const;
+  const commandHint = process.argv.slice(2).find((token) => (known as readonly string[]).includes(token));
+  console.error(commandUsage(error.command ?? (commandHint as (typeof known)[number] | undefined) ?? 'help'));
   process.exit(2);
 }
 
@@ -75,6 +90,21 @@ switch (args.command) {
     const entries = readHistoryWithWarning(historyFile).slice(-MAX_HISTORY_ENTRIES);
     const predictor = new Predictor(entries, { now: () => now, fs: realFs, homeDir: homedir() });
     const prediction = predictor.predict({ line, cursor: line.length, cwd });
+
+    if (args.json === true) {
+      // Machine-readable twin of the human output — for scripting, CI checks
+      // and bug reports; no daemon involved.
+      console.log(
+        JSON.stringify({
+          entries: entries.length,
+          line,
+          cwd,
+          prefix: prediction.prefix,
+          candidates: prediction.candidates,
+        }),
+      );
+      break;
+    }
 
     console.log(`history: ${entries.length} entries | line: "${line}" | prefix: "${prediction.prefix}"`);
     if (prediction.candidates.length === 0) {
@@ -131,7 +161,161 @@ switch (args.command) {
     break;
   }
 
+  case 'settings': {
+    const settingsFile = settingsFileFor(args.history ?? defaultHistoryFile());
+    const sub = args.subs[0] ?? 'list';
+
+    if (sub === 'list') {
+      const current = readSettings(settingsFile);
+      for (const warning of current.warnings) console.error(`tabcat: ${warning}`);
+      const keyWidth = Math.max(...SETTINGS.map((spec) => spec.key.length)) + 2;
+      const valueWidth = Math.max(7, ...SETTINGS.map((spec) => String(current.values.get(spec.key)).length)) + 2;
+      for (const spec of SETTINGS) {
+        const marker = current.overridden.has(spec.key) ? '*' : ' ';
+        const restart = spec.appliesLive ? '' : ' (takes effect at the next start)';
+        console.log(
+          `${spec.key.padEnd(keyWidth)}${String(current.values.get(spec.key)).padEnd(valueWidth)}${marker} ${spec.description}${restart}`,
+        );
+      }
+      console.log(`\n* changed — \`tabcat settings reset <key>\` restores the default (${settingsFile})`);
+      break;
+    }
+
+    // get/set/reset — the shape is validated in cli-args, the key here.
+    const key = args.subs[1] as string;
+    const spec = specFor(key);
+    if (spec === undefined) {
+      console.error(`tabcat: unknown setting: ${key} — \`tabcat settings list\` shows all keys.`);
+      process.exitCode = 1;
+      break;
+    }
+
+    if (sub === 'get') {
+      // Plain value, nothing else — scriptable.
+      console.log(String(readSettings(settingsFile).values.get(key)));
+      break;
+    }
+
+    try {
+      if (sub === 'reset') {
+        clearSetting(settingsFile, key);
+        console.log(`${key} = ${spec.default} (default)`);
+      } else {
+        const parsed = parseInput(spec, args.subs[2] as string);
+        if (!parsed.ok) {
+          console.error(`tabcat: ${key}: ${parsed.error}`);
+          process.exitCode = 1;
+          break;
+        }
+        writeSetting(settingsFile, key, parsed.value);
+        console.log(`${key} = ${parsed.value}${spec.appliesLive ? '' : ' — takes effect at the next start'}`);
+      }
+    } catch (error) {
+      // A hand-edited file with broken JSON: refuse cleanly, no stack trace.
+      console.error(`tabcat: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+    break;
+  }
+
+  case 'daemon': {
+    const historyFile = args.history ?? defaultHistoryFile();
+    const socketPath = resolveSocketPath(args.socket);
+    const sub = args.subs[0];
+
+    // Exists so other front ends (the macOS overlay, any script) do not have to
+    // reimplement the sun_path rule a third time — the zsh plugin already
+    // mirrors it. Pure output: no daemon contact, no directory created.
+    if (sub === 'path') {
+      console.log(socketPath);
+      break;
+    }
+
+    if (sub === 'status') {
+      const info = await pingDaemon(socketPath, 1_000);
+      if (info === null) {
+        console.log(`not running (socket ${socketPath})`);
+        process.exitCode = 1;
+        break;
+      }
+      console.log(
+        `running: version ${info.version}, protocol ${info.protocol}, state ${info.state}, pid ${info.pid} (socket ${socketPath})`,
+      );
+      if (info.protocol !== PROTOCOL_VERSION) {
+        console.log(`warning: this CLI speaks protocol ${PROTOCOL_VERSION} — restart the daemon with \`tabcat daemon stop\``);
+      }
+      break;
+    }
+
+    if (sub === 'stop') {
+      if (await shutdownDaemon(socketPath, 2_000)) console.log(`stopped (socket ${socketPath})`);
+      else {
+        console.log(`not running (socket ${socketPath})`);
+        process.exitCode = 1;
+      }
+      break;
+    }
+
+    let handle;
+    try {
+      handle = await startDaemon({
+        socketPath,
+        historyFile,
+        fs: realFs,
+        homeDir: homedir(),
+        magicNames: process.env['TABCAT_MAGIC_NAMES'] !== '0',
+        onWarn: (message) => console.error(`tabcat: ${message}`),
+      });
+    } catch (error) {
+      if (error instanceof AlreadyRunningError || isAddressInUse(error)) {
+        // The desired end state (a daemon is listening) already holds — the
+        // plugin races several shells into this on purpose, and two of them can
+        // pass the stale-socket probe before either has bound.
+        console.error(`tabcat: ${error instanceof Error ? error.message : String(error)}`);
+        break;
+      }
+      if (error instanceof SocketPathError) {
+        // A Node stack trace during shell startup reads like a crash.
+        console.error(`tabcat: ${error.message}`);
+        process.exitCode = 1;
+        break;
+      }
+      throw error;
+    }
+    console.error(`tabcat: daemon listening on ${handle.socketPath} (history ${historyFile})`);
+    const stop = (): void => void handle.close();
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+    // Survive the terminal that spawned it: the daemon is shared by all shells.
+    process.on('SIGHUP', () => {});
+    await handle.ready;
+    await handle.closed;
+    break;
+  }
+
+  case 'plugin': {
+    if (args.check === true) {
+      const result = checkEnvironment(defaultCheckDeps());
+      console.log(formatCheck(result));
+      if (!result.ok) process.exitCode = 1;
+      break;
+    }
+    const pluginFile = pluginFilePath();
+    if (!existsSync(pluginFile)) {
+      console.error(`tabcat: plugin file not found: ${pluginFile}`);
+      console.error('tabcat: run `npm run build` in a checkout, or reinstall the package.');
+      process.exitCode = 1;
+      break;
+    }
+    console.log(initSnippet(pluginFile));
+    break;
+  }
+
   case 'repl': {
+    // Imported on demand: the REPL pulls in Ink and React, which cost ~250 ms
+    // of module loading. `tabcat daemon` is started from a keystroke path and
+    // must not pay for a UI it never renders.
+    const { runRepl } = await import('./repl/run.js');
     await runRepl(args.history ?? defaultHistoryFile(), { minimal: args.minimal ?? false });
     break;
   }

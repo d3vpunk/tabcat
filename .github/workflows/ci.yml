@@ -22,8 +22,51 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      # zsh is not preinstalled on the Linux runner; without it the plugin
+      # tests (wire parity, widget wiring, zpty) silently skip themselves.
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: Verify zsh can run the plugin
+        run: |
+          zsh --version
+          zsh -fc 'zmodload zsh/net/socket && zmodload zsh/zpty && print modules-ok'
       - run: npm test
       - run: npm run build
+
+  test-macos:
+    # The daemon's socket path rules are platform specific (sun_path is 104
+    # bytes on darwin, 108 on Linux), and zsh ships with macOS — the plugin
+    # tests are worth running on both.
+    name: Node 20 / macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Verify zsh can run the plugin
+        run: |
+          zsh --version
+          zsh -fc 'zmodload zsh/net/socket && zmodload zsh/zpty && print modules-ok'
+      - run: npm test
+
+  gui-macos:
+    # The Swift side has no test target yet (PLAN-gui-rehaul.md, phase 6), so the
+    # pinned tables in Check.swift are all it has — and nothing ran them. Three
+    # hazard-scan holes shipped behind that gap. `--tables` needs no daemon and no
+    # pty, so it gates here; the rest of `--check` still needs a real machine.
+    name: GUI / macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Build
+        run: swift build --package-path gui/macos
+      - name: Pinned tables
+        run: swift run --package-path gui/macos TabcatGUI --tables
 
   package:
     name: Package / ${{ matrix.os }}

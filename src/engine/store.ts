@@ -19,6 +19,21 @@ export function defaultHistoryFile(): string {
   return `${homedir()}/.config/tabcat/history.jsonl`;
 }
 
+/**
+ * One history line -> entry, or null when it is blank, not JSON, or not shaped
+ * like an entry. Shared with the daemon, which parses appended lines one by one
+ * as they arrive instead of re-reading the whole file.
+ */
+export function parseHistoryLine(raw: string): HistoryEntry | null {
+  if (raw.trim() === '') return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isHistoryEntry(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Reads history.jsonl; broken lines are counted instead of aborting startup. */
 export function readHistory(file: string, onSkipped?: (count: number) => void): HistoryEntry[] {
   if (!existsSync(file)) return [];
@@ -26,13 +41,9 @@ export function readHistory(file: string, onSkipped?: (count: number) => void): 
   let skipped = 0;
   for (const line of readFileSync(file, 'utf8').split('\n')) {
     if (line.trim() === '') continue;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (isHistoryEntry(parsed)) entries.push(parsed);
-      else skipped++;
-    } catch {
-      skipped++;
-    }
+    const entry = parseHistoryLine(line);
+    if (entry === null) skipped++;
+    else entries.push(entry);
   }
   if (skipped > 0) onSkipped?.(skipped);
   return entries;
@@ -93,7 +104,12 @@ export function compactHistory(
   }
 }
 
-function acquireLock(file: string, waitMs: number): (() => void) | null {
+/**
+ * Sync lock with a bounded wait; null when the lock stays busy past the
+ * deadline. Shared with the settings store — same lockfile semantics for
+ * every file tabcat writes.
+ */
+export function acquireLock(file: string, waitMs: number): (() => void) | null {
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {

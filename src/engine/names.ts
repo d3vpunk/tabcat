@@ -82,6 +82,17 @@ export class NameIndex {
     this.byLine.delete(line);
   }
 
+  /**
+   * Replaces the whole index in place. The Predictor keeps this instance by
+   * reference, so reloading names.jsonl (daemon: another shell created a
+   * handle) must mutate the existing index instead of building a new one —
+   * otherwise the reload would force a full predictor rebuild.
+   */
+  reset(names: readonly MagicName[]): void {
+    this.byLine.clear();
+    for (const name of names) this.add(name);
+  }
+
   /** Is this command already named? */
   has(line: string): boolean {
     return this.byLine.has(line);
@@ -91,6 +102,21 @@ export class NameIndex {
   handleFor(line: string, cwd: string): string | null {
     const name = this.byLine.get(line);
     return name !== undefined && cwdMatches(name, cwd) ? name.name : null;
+  }
+
+  /**
+   * Handle of a named command the typed text is on its way to — a prefix match,
+   * so the plugin badge can appear while typing instead of only once the line is
+   * complete. Closest completion first (shortest command), newest wins ties.
+   * `minLength` keeps a single character from matching half the index.
+   */
+  handleForPrefix(typed: string, cwd: string, minLength = 2): string | null {
+    const text = typed.trimStart();
+    if (text.trim().length < minLength) return null;
+    const hits = [...this.byLine.values()]
+      .filter((name) => name.line.startsWith(text) && cwdMatches(name, cwd))
+      .sort((a, b) => a.line.length - b.line.length || b.ts - a.ts);
+    return hits[0]?.name ?? null;
   }
 
   /** Handles in use (collision guard). With `cwd`, only handles active there —

@@ -53,23 +53,25 @@ export function readNames(file: string): MagicName[] {
 }
 
 /**
- * Best-effort append with a lightweight lockfile: a busy lock or any I/O
- * error is a silent no-op — losing one handle write must never throw into
- * the REPL loop.
+ * Best-effort append with a lightweight lockfile: a busy lock or any I/O error
+ * never throws into the caller. Returns whether the record reached the file —
+ * a caller that mirrors names in memory must not claim success for a write that
+ * silently did nothing.
  */
-export function appendName(file: string, name: MagicName): void {
+export function appendName(file: string, name: MagicName): boolean {
   try {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const release = tryLock(file);
-    if (release === null) return;
+    if (release === null) return false;
     try {
       appendFileSync(file, `${JSON.stringify(name)}\n`, { encoding: 'utf8', mode: 0o600 });
       chmodSync(file, 0o600);
+      return true;
     } finally {
       release();
     }
   } catch {
-    // best-effort by design
+    return false;
   }
 }
 
