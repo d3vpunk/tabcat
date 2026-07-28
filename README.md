@@ -319,6 +319,24 @@ The engine is fully decoupled from the terminal — the lexer, model, merge and 
 
 The plugin is covered on three levels: the TSV wire format and the socket path are pinned to their TypeScript counterparts by cross-language parity tests, the shell functions (privacy filter, buffer surgery, key wiring, hook order) run in a pristine `zsh -f`, and a small `zpty` set drives the real widgets in a real pseudo terminal. zsh is required for those; without it they skip.
 
+## Updating
+
+```sh
+tabcat daemon stop     # after every update
+```
+
+The daemon is a long-lived process running the code of whatever version
+started it, and it exits on its own only after 45 minutes idle. After an
+update the old one keeps answering: an op it does not know yet fails with
+`bad_op`, a protocol bump answers `bad_protocol` — the plugin then disables
+itself for the session and falls back to plain zsh rather than hang.
+`tabcat daemon stop` ends it; the next shell start or keystroke spawns a
+fresh one from the new code. `tabcat daemon status` shows which version is
+actually listening.
+
+History, names and settings files are carried forward unchanged — no
+migration on update.
+
 ## Status
 
 tabcat is young and evolving. The engine is feature-complete; the REPL and the zsh plugin are built and being polished. The macOS overlay ([gui/macos](gui/macos/README.md)) is in **beta**: in daily use and solid, with known gaps documented in its README. Feedback and contributions welcome.
