@@ -10,6 +10,7 @@ import { boolSetting, clearSetting, intSetting, readSettings, settingsFileFor, w
 import { VERSION } from '../version.js';
 import { ReplOutput, promptOnce, showReplHelp, showReplOutput } from './app.js';
 import { ShellSnapshot, execute, warmShellSnapshot } from './executor.js';
+import { osc7Cwd } from './osc.js';
 import { realFs } from './real-fs.js';
 import { showMeowAnimation } from './meow.js';
 import { showSettingsEditor } from './settings-ui.js';
@@ -239,6 +240,11 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
   for (const warning of settings.warnings) console.error(`tabcat: ${warning}`);
 
   for (;;) {
+    // Report the cwd to the terminal (OSC 7) at every prompt — the shell
+    // integration that would normally do this is not running inside the REPL.
+    // Without it, "new tab in same directory" (Ghostty, iTerm2, Terminal.app)
+    // falls back to $HOME.
+    process.stdout.write(osc7Cwd(cwd));
     const result = await promptOnce({
       predictor,
       cwd,
