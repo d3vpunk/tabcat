@@ -6,7 +6,7 @@ import { appendName, namesFileFor, readNames } from '../engine/names-store.js';
 import { FsLike } from '../engine/fs-completer.js';
 import { Prediction, Predictor } from '../engine/predictor.js';
 import { fuzzySearch } from '../repl/history-search.js';
-import { MAX_HISTORY_ENTRIES, appendHistory, compactHistory, parseHistoryLine } from '../engine/store.js';
+import { MAX_HISTORY_ENTRIES, appendHistory, compactHistory, forgetHistory, parseHistoryLine } from '../engine/store.js';
 
 export type HostState = 'warming' | 'ready';
 
@@ -240,6 +240,22 @@ export class EngineHost {
     this.nameIndex.remove(line);
     this.namesSignature = '';
     return true;
+  }
+
+  /**
+   * Removes every occurrence of `line` from the history and rebuilds.
+   *
+   * A rebuild rather than an unlearn, and rebuilding NOW rather than letting
+   * the tail follow notice the changed inode: the client that asked is about
+   * to request a fresh list, and serving the forgotten line back once more is
+   * exactly the outcome the op exists to prevent. Deliberately O(all entries)
+   * — forgetting is a deliberate act, never a keystroke.
+   */
+  forget(line: string): number {
+    const removed = forgetHistory(this.options.historyFile, line);
+    if (removed === 0) return 0;
+    this.loadAll();
+    return removed;
   }
 
   /** Periodic maintenance: without it a plugin-only user never compacts, since

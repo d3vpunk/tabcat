@@ -19,6 +19,10 @@ struct PromptView: View {
     /// Which wordmark to draw: the glass follows the system appearance, and half the
     /// logo is near-black.
     @Environment(\.colorScheme) private var colorScheme
+    /// Which list row the pointer is over, for the hover-revealed x. One value
+    /// rather than per-row state: only one row can be hovered at a time, and a
+    /// row that scrolls out from under the pointer must not keep its x.
+    @State private var hoveredRow: Int?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -328,6 +332,20 @@ struct PromptView: View {
                     .font(Typeface.small(9))
                     .foregroundStyle(.tertiary)
             }
+            // Wherever a history entry stands behind the row (the model
+            // decides — history hits and history-fed completions, never fs,
+            // magic or directories). Revealed on hover — an x on every row
+            // would be noise — and kept on the selected row so it exists for
+            // the keyboard's eye too.
+            if model.canForget(entry), hoveredRow == entry.index || isSelected {
+                Button { model.forget(entry) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove from history")
+            }
         }
         .font(Typeface.small(12))
         .foregroundStyle(isSelected ? .primary : .secondary)
@@ -341,6 +359,13 @@ struct PromptView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { model.choose(entry.index) }
+        .onHover { inside in
+            if inside {
+                hoveredRow = entry.index
+            } else if hoveredRow == entry.index {
+                hoveredRow = nil
+            }
+        }
     }
 
     @ViewBuilder

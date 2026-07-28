@@ -105,6 +105,34 @@ export function compactHistory(
 }
 
 /**
+ * Removes every entry whose line equals `line` — the user said "never suggest
+ * this again", and the same command run at three different times is three
+ * entries that would each resurrect it (atomic: tempfile + rename, like
+ * compactHistory). Returns how many entries went; 0 leaves the file untouched.
+ */
+export function forgetHistory(file: string, line: string): number {
+  if (!existsSync(file)) return 0;
+  const release = acquireLock(file, 2_000);
+  if (!release) throw new Error(`Could not acquire history lock: ${file}`);
+  try {
+    const current = readHistory(file);
+    const kept = current.filter((entry) => entry.line !== line);
+    const removed = current.length - kept.length;
+    if (removed === 0) return 0;
+    const tmp = `${file}.tmp-${process.pid}`;
+    writeFileSync(tmp, kept.length === 0 ? '' : kept.map((entry) => JSON.stringify(entry)).join('\n') + '\n', {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    renameSync(tmp, file);
+    chmodSync(file, 0o600);
+    return removed;
+  } finally {
+    release();
+  }
+}
+
+/**
  * Sync lock with a bounded wait; null when the lock stays busy past the
  * deadline. Shared with the settings store — same lockfile semantics for
  * every file tabcat writes.

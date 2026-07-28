@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HistoryEntry } from '../../src/engine/model.js';
-import { appendHistory, compactHistory, dedupeImportEntries, readHistory } from '../../src/engine/store.js';
+import { appendHistory, compactHistory, dedupeImportEntries, forgetHistory, readHistory } from '../../src/engine/store.js';
 
 const entry = (n: number): HistoryEntry => ({ ts: n, cwd: '/x', line: `cmd-${n}` });
 
@@ -154,6 +154,65 @@ describe('store: compactHistory', () => {
   it('removes lock after successful compaction', () => {
     for (let n = 1; n <= 4; n++) appendHistory(file, entry(n));
     compactHistory(file, 2);
+
+    expect(() => mkdirSync(`${file}.lock`)).not.toThrow();
+  });
+});
+
+describe('store: forgetHistory', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'tabcat-forget-'));
+    file = join(dir, 'history.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const at = (ts: number, line: string): HistoryEntry => ({ ts, cwd: '/x', line });
+
+  it('removes every occurrence of the line, not just one', () => {
+    appendHistory(file, at(1, 'cd]'));
+    appendHistory(file, at(2, 'git status'));
+    appendHistory(file, at(3, 'cd]'));
+
+    expect(forgetHistory(file, 'cd]')).toBe(2);
+    expect(readHistory(file).map((e) => e.line)).toEqual(['git status']);
+  });
+
+  it('a missing line touches nothing and reports 0', () => {
+    appendHistory(file, at(1, 'ls'));
+    const before = readFileSync(file, 'utf8');
+
+    expect(forgetHistory(file, 'never typed')).toBe(0);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('missing file is 0, not an error', () => {
+    expect(forgetHistory(join(dir, 'absent.jsonl'), 'ls')).toBe(0);
+  });
+
+  it('exact match only — a prefix does not take its extensions with it', () => {
+    appendHistory(file, at(1, 'git'));
+    appendHistory(file, at(2, 'git status'));
+
+    expect(forgetHistory(file, 'git')).toBe(1);
+    expect(readHistory(file).map((e) => e.line)).toEqual(['git status']);
+  });
+
+  it('forgetting the last entry leaves a readable empty file', () => {
+    appendHistory(file, at(1, 'ls'));
+
+    expect(forgetHistory(file, 'ls')).toBe(1);
+    expect(readHistory(file)).toEqual([]);
+  });
+
+  it('removes lock after a rewrite', () => {
+    appendHistory(file, at(1, 'ls'));
+    forgetHistory(file, 'ls');
 
     expect(() => mkdirSync(`${file}.lock`)).not.toThrow();
   });

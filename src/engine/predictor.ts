@@ -59,7 +59,7 @@ export interface PredictInput {
 }
 
 export class Predictor {
-  private readonly model: ChunkModel;
+  private model: ChunkModel;
 
   constructor(
     entries: readonly HistoryEntry[],
@@ -73,6 +73,17 @@ export class Predictor {
   learn(entry: HistoryEntry): void {
     if (!isLearnable(entry)) return;
     this.model.learn(entry);
+  }
+
+  /**
+   * Relearns from scratch. The only way to unlearn: occurrences carry no
+   * back-reference to their entry, and `maxOccurrencesPerEdge` has already
+   * discarded what a surgical removal would need to restore. Costs the same
+   * O(entries) as startup and forgetting is rare — a keystroke never pays this.
+   */
+  rebuild(entries: readonly HistoryEntry[]): void {
+    this.model = new ChunkModel(this.config.scoring);
+    for (const entry of entries) this.learn(entry);
   }
 
   predict(input: PredictInput): Prediction {

@@ -109,6 +109,11 @@ describe('protocol: request parsing', () => {
     expect(parsed).toEqual({ ok: true, request: { op: 'cwds', id: 'd5', limit: 7 } });
   });
 
+  it('parses forget — no cwd, forgetting is global', () => {
+    const parsed = parseRequest(request('forget', 'f1', String(PROTOCOL_VERSION), 'git\\tpush'));
+    expect(parsed).toEqual({ ok: true, request: { op: 'forget', id: 'f1', line: 'git\tpush' } });
+  });
+
   it('parses names ops', () => {
     const list = parseRequest(request('names', 'c3', String(PROTOCOL_VERSION), 'list', '/x', '', ''));
     expect(list.ok && list.request.op === 'names' && list.request.sub).toBe('list');
@@ -127,6 +132,7 @@ describe('protocol: request parsing', () => {
     ['limit above cap', predict('9999', '0', '/x', 'ls'), 'bad_value'],
     ['empty cwd', predict('1', '0', '', 'ls'), 'bad_value'],
     ['blank learn line', request('learn', 'a1', '1', '0', '1', '/x', '   '), 'bad_value'],
+    ['blank forget line', request('forget', 'a1', '1', '  '), 'bad_value'],
     ['learn without timestamp', request('learn', 'a1', '1', '0', '0', '/x', 'ls'), 'bad_value'],
     ['learn timestamp in microseconds', request('learn', 'a1', '1', '0', String(Date.now() * 1000), '/x', 'ls'), 'bad_value'],
     ['unknown names op', request('names', 'a1', '1', 'rename', '/x', 'gst', 'git status'), 'bad_value'],

@@ -40,6 +40,12 @@ export interface PromptOptions {
    */
   onForget?: ((line: string) => void) | undefined;
   /**
+   * ^X on a history suggestion: remove `line` from the history and rebuild
+   * the model. Returns how many entries went — 0 = was not there, negative =
+   * the write failed — so the toast can say what actually happened.
+   */
+  onForgetHistory?: ((line: string) => number) | undefined;
+  /**
    * Compact variant for short terminals (IDE panes): the dropdown collapses
    * to a single row with an inline counter and the legend line disappears.
    * Search, paste mode, naming badge and `:`-hints render as in full mode.
@@ -159,7 +165,7 @@ const HELP_KEYS = [
   ['↑ / ↓', 'Navigate history or suggestions'],
   ['Ctrl-R', 'Search history'],
   ['Ctrl-N', 'Name this command'],
-  ['Ctrl-X', 'Forget shown magic name'],
+  ['Ctrl-X', 'Forget selected suggestion / magic name'],
   ['Esc', 'Close suggestions'],
   ['Ctrl-C', 'Clear current input'],
   ['Ctrl-D', 'Quit tabcat'],
@@ -417,7 +423,7 @@ interface AppProps extends PromptOptions {
   onDone: (result: PromptResult) => void;
 }
 
-function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, minimal = false, dropdownRows: dropdownRowsSetting = DROPDOWN_ROWS, footer = true, onDone }: AppProps) {
+function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, onForgetHistory, minimal = false, dropdownRows: dropdownRowsSetting = DROPDOWN_ROWS, footer = true, onDone }: AppProps) {
   const { exit } = useApp();
   const { internal_eventEmitter } = useStdin();
 
@@ -439,9 +445,21 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
   // ^X mutates the NameIndex inside the predictor mid-prompt — the counter
   // invalidates the memo below so the forgotten candidate disappears at once.
   const [namesVersion, setNamesVersion] = useState(0);
+  // Same trick for a forgotten history line: run.ts splices `historyLines` and
+  // rebuilds the predictor IN PLACE, so every reference the memos key on stays
+  // identical — without the counter both would keep serving the deleted line.
+  const [historyVersion, setHistoryVersion] = useState(0);
+  // Short-lived confirmation under the prompt ("forgot …"). One line, no modal
+  // — forgetting was deliberate, the toast only proves it happened.
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (toast === null) return;
+    const timer = setTimeout(() => setToast(null), 2_500);
+    return () => clearTimeout(timer);
+  }, [toast]);
   const prediction = useMemo(
     () => predictor.predict({ line, cursor, cwd }),
-    [predictor, line, cursor, cwd, namesVersion],
+    [predictor, line, cursor, cwd, namesVersion, historyVersion],
   );
   // Magic lines (":...") get their candidates from the fixed
   // command list — the predictor does not know them, they never
@@ -470,7 +488,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
   // re-edit them — re-paste instead of recall.
   const recentUnique = useMemo(
     () => [...new Set([...historyLines].reverse())].filter((entry) => !entry.includes('\n')),
-    [historyLines],
+    [historyLines, historyVersion],
   );
   // Substring search (fish-style ↑/↓): filter recentUnique by historyFilter,
   // so navigateSubstring navigates directly through the match list. Outside
@@ -599,6 +617,21 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
       // recomputes the prediction without the forgotten handle.
       onForget?.(outcome.line);
       setNamesVersion((version) => version + 1);
+      setToast(`forgot ⚡${outcome.line}`);
+      return setState(outcome.state);
+    }
+    if (outcome.kind === 'forget-history') {
+      // Remove the line from the history, keep the prompt open. The counter
+      // recomputes prediction and recentUnique — run.ts mutated both sources
+      // in place, so no reference the memos key on has changed.
+      const removed = onForgetHistory?.(outcome.line) ?? 0;
+      if (removed > 0) {
+        setHistoryVersion((version) => version + 1);
+        const label = truncateEnd(singleLine(outcome.line), 48);
+        setToast(`forgot "${label}"${removed > 1 ? ` (${removed}×)` : ''}`);
+      } else {
+        setToast(removed < 0 ? 'could not forget — history file is busy' : 'not in history — nothing forgotten');
+      }
       return setState(outcome.state);
     }
     if (outcome.kind === 'clear') {
@@ -804,7 +837,14 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
         )
       )}
 
-      {naming === null && legendVisible(legendCompact, {
+      {/* The toast borrows the legend's line instead of adding one: transient,
+          and the legend's key help is the least missed thing for 2.5 seconds. */}
+      {naming === null && toast !== null && (
+        <Box>
+          <Text color="yellow">🐱 {toast}</Text>
+        </Box>
+      )}
+      {naming === null && toast === null && legendVisible(legendCompact, {
         pasted,
         searchQuery,
         discoveryHandle,
@@ -823,13 +863,13 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
               {pasted !== null
                 ? '🐱 multiline paste · enter: run as pasted · esc: discard'
                 : searchQuery !== null
-                ? '🐱 ↑/↓: select · enter: accept · esc: back'
+                ? '🐱 ↑/↓: select · enter: accept · ^x: forget · esc: back'
                 : dropdownVisible && magicHints === null && candidates[selectedIndex]?.source === 'magic'
                   ? '🐱 enter/tab: accept · ^x: forget name · ↑/↓: select · esc: close'
                   : discoveryHandle !== null
                     ? '🐱 enter: run · ^n: rename · ^x: forget name'
                     : dropdownVisible && magicHints === null && selectedIndex > 0 && candidates.length > 0
-                      ? '🐱 enter/tab: accept · ↑/↓: select · →: chunk · esc: close'
+                      ? '🐱 enter/tab: accept · ↑/↓: select · →: chunk · ^x: forget · esc: close'
                       : '🐱 tab: all · →: chunk · ⇧tab: undo · ^⌫: delete chunk · alt/option+⌫: fast · ^r: search'}
             </Text>
           )}

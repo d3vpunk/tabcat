@@ -137,6 +137,12 @@ export type KeyOutcome =
    * happens outside; `state` continues the prompt with the selection reset.
    */
   | { kind: 'forget'; line: string; state: PromptState }
+  /**
+   * ^X on a history suggestion (selected dropdown row or Ctrl-R hit): remove
+   * `line` from the history — every occurrence, or it resurfaces at once.
+   * Persistence and the model rebuild happen outside, like 'forget'.
+   */
+  | { kind: 'forget-history'; line: string; state: PromptState }
   | { kind: 'exit' };
 
 const update = (state: PromptState): KeyOutcome => ({ kind: 'update', state });
@@ -361,6 +367,14 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     if (key.upArrow) return update({ ...state, searchSelected: Math.max(state.searchSelected - 1, 0) });
     if (key.downArrow)
       return update({ ...state, searchSelected: Math.min(state.searchSelected + 1, ctx.searchResults.length - 1) });
+    // ^X on a hit: forget it right where it turned up. Search results ARE
+    // whole history lines, so this is the one place no accepted-line
+    // arithmetic is needed. The mode stays open — the list refreshes without it.
+    if (key.ctrl && input === 'x') {
+      const picked = ctx.searchResults[state.searchSelected];
+      if (picked === undefined) return update(state);
+      return { kind: 'forget-history', line: picked, state: { ...state, searchSelected: 0 } };
+    }
     // Query change resets the selection to the top hit — otherwise
     // searchSelected points into the void after the hit list shrinks.
     if (key.backspace || key.delete) {
@@ -391,19 +405,34 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     return update({ ...state, naming: ctx.names.handleFor(state.line.trim(), ctx.cwd ?? '') ?? '' });
   }
   if (key.ctrl && input === 'x') {
-    // Forget a magic name right where it gets in the way: the selected ⚡
-    // candidate in the dropdown, or the typed line's own handle (discovery
-    // badge). Nothing executes — the prompt keeps the typed line.
-    if (ctx.names === undefined) return update(state);
+    // Forget the selected suggestion right where it gets in the way. Nothing
+    // executes — the prompt keeps the typed line. Three targets, in order:
+    // a ⚡ candidate loses its magic name, the typed line's own handle
+    // (discovery badge) likewise, and a history candidate is removed from the
+    // history itself.
     const candidate = ctx.candidates[clampedSelected(state, ctx)];
-    const target =
-      state.dropdownVisible && candidate?.source === 'magic'
-        ? candidate.display
-        : ctx.names.handleFor(state.line.trim(), ctx.cwd ?? '') !== null
-          ? state.line.trim()
-          : null;
-    if (target === null) return update(state);
-    return { kind: 'forget', line: target, state: { ...state, selected: 0 } };
+    if (ctx.names !== undefined) {
+      if (state.dropdownVisible && candidate?.source === 'magic') {
+        return { kind: 'forget', line: candidate.display, state: { ...state, selected: 0 } };
+      }
+      if (ctx.names.handleFor(state.line.trim(), ctx.cwd ?? '') !== null) {
+        return { kind: 'forget', line: state.line.trim(), state: { ...state, selected: 0 } };
+      }
+    }
+    if (state.dropdownVisible && candidate && (candidate.source === 'history' || candidate.source === 'both')) {
+      // The candidate may be a merged stem ("npm ") rather than a full
+      // command. Forgetting targets what accepting would put on the line —
+      // and only when that is a real history line, so ^X on a stem stays a
+      // no-op instead of pretending to delete something that is not there.
+      const replaceFrom = state.cursor - (candidate.replacePrefixLength ?? ctx.prefix.length);
+      const target = (
+        state.line.slice(0, Math.max(0, replaceFrom)) + candidate.display + state.line.slice(state.cursor)
+      ).trim();
+      if (ctx.recentUnique.includes(target)) {
+        return { kind: 'forget-history', line: target, state: { ...state, selected: 0 } };
+      }
+    }
+    return update(state);
   }
   if (key.ctrl && input === 'c') {
     return update({ ...withLine(state, '', 0), undoStack: [], lastChangeWasAccept: false });

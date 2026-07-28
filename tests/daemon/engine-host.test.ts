@@ -400,3 +400,48 @@ describe('EngineHost: compaction', () => {
     expect(inserts(engine, 'ls ')).toContain('-la');
   });
 });
+
+describe('EngineHost: forget', () => {
+  it('removes every occurrence, rebuilds, and stops suggesting the line', () => {
+    write([entry('cd]'), entry('git status'), entry('cd]')]);
+    const engine = host();
+    expect(inserts(engine, 'cd')).toContain(']');
+
+    expect(engine.forget('cd]')).toBe(2);
+
+    expect(readFileSync(historyFile, 'utf8')).not.toContain('cd]');
+    expect(engine.stats().entries).toBe(1);
+    expect(inserts(engine, 'cd')).not.toContain(']');
+  });
+
+  it('drops the line from search results too', () => {
+    write([entry('npm test'), entry('npm run lint')]);
+    const engine = host();
+    expect(engine.search('npm', 10)).toContain('npm test');
+
+    engine.forget('npm test');
+
+    expect(engine.search('npm', 10)).not.toContain('npm test');
+  });
+
+  it('a line that is not there is 0 and no rebuild', () => {
+    write([entry('ls')]);
+    const engine = host();
+    const before = engine.stats().rebuilds;
+
+    expect(engine.forget('never typed')).toBe(0);
+    expect(engine.stats().rebuilds).toBe(before);
+  });
+
+  it('a foreign learn appended before the forget survives it', () => {
+    write([entry('ls')]);
+    const engine = host();
+    // Another shell appends without asking the daemon.
+    append(entry('git push'));
+
+    engine.forget('ls');
+
+    expect(engine.search('git', 10)).toContain('git push');
+    expect(readFileSync(historyFile, 'utf8')).toContain('git push');
+  });
+});

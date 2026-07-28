@@ -220,6 +220,32 @@ describe('daemon: learn', () => {
   });
 });
 
+describe('daemon: forget', () => {
+  it('removes the line over the wire and stops predicting it', async () => {
+    writeHistory(entry('cd]'), entry('git status'), entry('cd]', { ts: 1_700_000_000_001 }));
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+
+    const rows = await client.request('forget', 'cd]');
+    expect(rows[0]).toEqual(['ok', expect.any(String), '2']);
+    expect(readFileSync(historyFile, 'utf8')).not.toContain('cd]');
+
+    const prediction = await client.request('predict', '5', '2', CWD, 'cd');
+    expect(prediction.slice(1).map((row) => row[1])).not.toContain('cd]');
+    client.close();
+  });
+
+  it('a line that is not there answers ok 0', async () => {
+    writeHistory(entry('ls'));
+    await daemon();
+    const client = await TestClient.connect(socketPath);
+    const rows = await client.request('forget', 'never typed');
+    expect(rows[0]?.[0]).toBe('ok');
+    expect(rows[0]?.[2]).toBe('0');
+    client.close();
+  });
+});
+
 describe('daemon: cwds', () => {
   it('answers with ranked directories over the wire', async () => {
     writeHistory(

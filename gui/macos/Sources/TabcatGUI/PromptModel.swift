@@ -532,6 +532,67 @@ final class PromptModel: ObservableObject {
         return true
     }
 
+    /// Whether the x has anything true to promise on this row.
+    ///
+    /// History rows always — they ARE whole history lines. Completion rows
+    /// only when the history fed them (`history`/`both`): an fs candidate and
+    /// a magic handle have no history entry behind them, and a directory is
+    /// not one either.
+    func canForget(_ row: Suggestions.Row) -> Bool {
+        switch row.suggestion {
+        case .history:
+            return true
+        case let .completion(candidate):
+            return candidate.magicName.isEmpty && (candidate.source == "history" || candidate.source == "both")
+        case .directory:
+            return false
+        }
+    }
+
+    /// The x on a suggestion row: the line leaves the history itself — every
+    /// occurrence, or it would resurface with the next keystroke.
+    ///
+    /// A completion row targets the line accepting it would produce, the same
+    /// rule the REPL's ^X applies. That can be a merged stem the history never
+    /// contained as a whole line — the daemon then answers 0 and the status
+    /// line says so, which beats guessing here what the file contains.
+    func forget(_ row: Suggestions.Row) {
+        guard canForget(row), let client else { return }
+        let line: String
+        switch row.suggestion {
+        case let .history(hit):
+            line = hit
+            // Gone from the list at once; the daemon's answer only confirms it.
+            historyHits.removeAll { $0 == hit }
+        case let .completion(candidate):
+            // Same freshness rule as accept: `replace` counts back from the
+            // caret the list was asked for, and splicing a stale list would
+            // name a line that was never on screen.
+            guard candidatesAreFresh else { return }
+            line = acceptedLine(for: candidate, line: typed, caret: caret)
+                .trimmingCharacters(in: .whitespaces)
+            candidates.removeAll { $0.display == candidate.display }
+        case .directory:
+            return
+        }
+        clampSelection()
+        Task {
+            do {
+                let removed = try await client.forget(line: line)
+                status = removed > 0
+                    ? "forgot \u{201C}\(line.prefix(60))\u{201D}"
+                    : "not in history — nothing forgotten"
+                // The daemon rebuilt without the line, but other sections may
+                // still carry it — ask for a fresh list.
+                requestSuggestions()
+            } catch let error as DaemonError where error.code == "bad_op" {
+                status = "daemon predates the forget op — restart it with `tabcat daemon stop`"
+            } catch {
+                status = describe(error)
+            }
+        }
+    }
+
     /// Clicking a row does what Enter on it does — which is not the same thing for all
     /// three kinds. A command is filled in, a directory is gone to.
     func choose(_ index: Int) {

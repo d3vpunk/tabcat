@@ -304,6 +304,20 @@ function handleLine(line: string, host: EngineHost, options: DaemonOptions): Lin
       return { response: encodeMessage(rows) };
     }
 
+    case 'forget': {
+      if (host.state === 'warming') return { response: err(request.id, 'warming', 'predictor is still building') };
+      try {
+        // The count goes back: `0` tells the client the line was not there,
+        // which its toast should say instead of pretending a deletion happened.
+        return { response: ok(request.id, String(host.forget(request.line))) };
+      } catch (error) {
+        // A busy lock (another shell importing) or a read-only file: report,
+        // keep serving. Same containment as `learn`.
+        options.onWarn?.(`forget failed: ${messageOf(error)}`);
+        return { response: err(request.id, 'internal', messageOf(error)) };
+      }
+    }
+
     case 'cwds': {
       if (host.state === 'warming') return { response: err(request.id, 'warming', 'predictor is still building') };
       const limit = request.limit === 0 ? 10 : request.limit;

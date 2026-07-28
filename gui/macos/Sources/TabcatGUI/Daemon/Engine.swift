@@ -63,6 +63,16 @@ extension DaemonClient {
         return rows.dropFirst().compactMap(\.first).filter { !$0.isEmpty }
     }
 
+    /// `forget <line>` — removes every occurrence of the line from the history
+    /// and rebuilds the daemon's model. Returns how many entries went; 0 means
+    /// the line was not there, which the status line should say instead of
+    /// pretending a deletion happened.
+    func forget(line: String) async throws -> Int {
+        let rows = try await request(op: "forget", fields: [line])
+        guard let header = rows.first, header.count > 2 else { return 0 }
+        return Int(header[2]) ?? 0
+    }
+
     /// `cwds <limit>` — the directories worked in, ranked by frecency. Empty on a
     /// fresh install, because imported shell history carries no directory. The
     /// caller has to treat that as "seed your own list", not as "no directories".

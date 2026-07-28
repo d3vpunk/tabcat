@@ -39,6 +39,10 @@ export type DaemonRequest =
   | { op: 'learn'; id: string; exitCode: number; ts: number; cwd: string; line: string }
   | { op: 'names'; id: string; sub: 'list' | 'create' | 'delete' | 'resolve'; cwd: string; name: string; line: string }
   | { op: 'search'; id: string; limit: number; cwd: string; query: string }
+  // No cwd either: forgetting is global by design. The user said "never
+  // suggest this again", and a line forgotten only for one directory would
+  // resurface in every other.
+  | { op: 'forget'; id: string; line: string }
   // No cwd field, unlike every other op: this is what a client asks BECAUSE it
   // has no working directory to send.
   | { op: 'cwds'; id: string; limit: number }
@@ -125,6 +129,7 @@ const FIELD_COUNT: Record<DaemonRequest['op'], number> = {
   learn: 7,
   names: 7,
   search: 6,
+  forget: 4,
   cwds: 4,
   settings: 6,
 };
@@ -207,6 +212,11 @@ export function parseRequest(rawLine: string): ParseResult {
       const cwd = value(4);
       if (cwd === '') return fail(rawId, 'bad_value', 'cwd must not be empty');
       return { ok: true, request: { op: 'search', id: rawId, limit, cwd, query: value(5) } };
+    }
+    case 'forget': {
+      const line = value(3);
+      if (line.trim() === '') return fail(rawId, 'bad_value', 'line must not be empty');
+      return { ok: true, request: { op: 'forget', id: rawId, line } };
     }
     case 'cwds': {
       const limit = Number(fields[3]);

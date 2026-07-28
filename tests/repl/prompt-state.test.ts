@@ -797,3 +797,106 @@ describe('Prompt state: multiline paste mode', () => {
     }
   });
 });
+
+describe('Prompt state: Ctrl-X forgets a history suggestion', () => {
+  const historyCandidate = (display: string, insert = ''): RankedCandidate => ({
+    display,
+    insert,
+    score: 1,
+    source: 'history',
+  });
+
+  const typed = (line: string, selected = 0): PromptState => ({
+    ...initialPromptState,
+    line,
+    cursor: line.length,
+    selected,
+  });
+
+  it('^X on a selected history candidate yields forget-history with the accepted line', () => {
+    const context = ctx({
+      candidates: [historyCandidate('cd', ''), historyCandidate('cd]', ']')],
+      prefix: 'cd',
+      recentUnique: ['cd]', 'cd'],
+    });
+    const outcome = handleKey(typed('cd', 1), key('x', { ctrl: true }), context);
+    expect(outcome.kind).toBe('forget-history');
+    if (outcome.kind === 'forget-history') {
+      expect(outcome.line).toBe('cd]');
+      // The prompt keeps the typed line, selection back on top.
+      expect(outcome.state.line).toBe('cd');
+      expect(outcome.state.selected).toBe(0);
+    }
+  });
+
+  it('^X on a merged stem that is no real history line stays a no-op', () => {
+    const context = ctx({
+      candidates: [historyCandidate('npm ', 'npm ')],
+      prefix: '',
+      recentUnique: ['npm test', 'npm run lint'],
+    });
+    const outcome = handleKey(typed(''), key('x', { ctrl: true }), context);
+    expect(outcome.kind).toBe('update');
+  });
+
+  it('^X works without a NameIndex (magic layer dormant)', () => {
+    const context = ctx({
+      candidates: [historyCandidate('git status')],
+      prefix: '',
+      recentUnique: ['git status'],
+    });
+    const outcome = handleKey(typed(''), key('x', { ctrl: true }), context);
+    expect(outcome.kind).toBe('forget-history');
+  });
+
+  it('^X on an fs candidate does nothing — there is no history entry behind it', () => {
+    const fsCandidate: RankedCandidate = { display: 'src/', insert: 'src/', score: 1, source: 'fs' };
+    const context = ctx({ candidates: [fsCandidate], prefix: '', recentUnique: ['ls src/'] });
+    const outcome = handleKey(typed(''), key('x', { ctrl: true }), context);
+    expect(outcome.kind).toBe('update');
+  });
+
+  it('^X with the dropdown closed does nothing', () => {
+    const context = ctx({ candidates: [historyCandidate('git status')], prefix: '', recentUnique: ['git status'] });
+    const state = { ...typed(''), dropdownVisible: false };
+    const outcome = handleKey(state, key('x', { ctrl: true }), context);
+    expect(outcome.kind).toBe('update');
+  });
+
+  it('a magic candidate still forgets the name, not the history', () => {
+    const magic: RankedCandidate = {
+      display: 'git status',
+      insert: 'git status',
+      score: 1,
+      source: 'magic',
+      magicName: 'gst',
+    };
+    const context = ctx({
+      candidates: [magic],
+      prefix: '',
+      recentUnique: ['git status'],
+      names: new NameIndex([{ name: 'gst', line: 'git status', cwds: [], ts: 1 }]),
+      cwd: '/x',
+    });
+    const outcome = handleKey(typed('gst'), key('x', { ctrl: true }), context);
+    expect(outcome.kind).toBe('forget');
+  });
+
+  it('^X in Ctrl-R search mode forgets the selected hit and stays in the mode', () => {
+    const searching: PromptState = { ...initialPromptState, searchQuery: 'npm', searchSelected: 1 };
+    const context = ctx({ searchResults: ['npm run lint', 'npm test'] });
+    const outcome = handleKey(searching, key('x', { ctrl: true }), context);
+    expect(outcome.kind).toBe('forget-history');
+    if (outcome.kind === 'forget-history') {
+      expect(outcome.line).toBe('npm test');
+      expect(outcome.state.searchQuery).toBe('npm');
+      expect(outcome.state.searchSelected).toBe(0);
+    }
+  });
+
+  it('^X in search mode with no hits does nothing', () => {
+    const searching: PromptState = { ...initialPromptState, searchQuery: 'zzz', searchSelected: 0 };
+    const outcome = handleKey(searching, key('x', { ctrl: true }), ctx({ searchResults: [] }));
+    expect(outcome.kind).toBe('update');
+  });
+});

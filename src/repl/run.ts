@@ -4,7 +4,7 @@ import { MagicName, NameIndex } from '../engine/names.js';
 import { appendName, namesFileFor, readNames } from '../engine/names-store.js';
 import { Predictor } from '../engine/predictor.js';
 import { detectShell } from '../engine/shell.js';
-import { appendHistory, compactHistory, defaultHistoryFile } from '../engine/store.js';
+import { appendHistory, compactHistory, defaultHistoryFile, forgetHistory } from '../engine/store.js';
 import { SETTINGS, parseInput, specFor } from '../settings/schema.js';
 import { boolSetting, clearSetting, intSetting, readSettings, settingsFileFor, writeSetting } from '../settings/store.js';
 import { VERSION } from '../version.js';
@@ -254,6 +254,30 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
       minimal: options.minimal ?? false,
       dropdownRows: intSetting(settings, 'repl.dropdownRows'),
       footer: boolSetting(settings, 'repl.footer'),
+      // ^X on a history suggestion: every occurrence leaves the file, then the
+      // model relearns without it. The splices are in place on purpose — the
+      // running prompt holds `entries` and `historyLines` by reference, and a
+      // fresh array would update nothing it can see.
+      onForgetHistory: (line: string): number => {
+        let removed = 0;
+        try {
+          removed = forgetHistory(historyFile, line);
+        } catch {
+          // A busy lock (an import, another daemon compacting): report failure
+          // through the return value — the prompt's toast says it, a
+          // console.error would tear into Ink's frame.
+          return -1;
+        }
+        if (removed === 0) return 0;
+        for (let i = entries.length - 1; i >= 0; i--) {
+          if (entries[i]?.line === line) entries.splice(i, 1);
+        }
+        for (let i = historyLines.length - 1; i >= 0; i--) {
+          if (historyLines[i] === line) historyLines.splice(i, 1);
+        }
+        predictor.rebuild(entries.filter((entry) => !entry.line.includes('\n')));
+        return removed;
+      },
       ...(magicEnabled
         ? {
             names: nameIndex,
