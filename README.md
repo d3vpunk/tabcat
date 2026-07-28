@@ -12,8 +12,9 @@
 <p align="center">
   <img alt="Node.js ≥ 20" src="https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-462%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-614%20passing-brightgreen">
   <img alt="Shells" src="https://img.shields.io/badge/shells-zsh%20%7C%20bash-blue">
+  <img alt="macOS overlay: beta" src="https://img.shields.io/badge/macOS%20overlay-beta-orange?logo=apple">
 </p>
 
 ---
@@ -231,6 +232,15 @@ fall back to plain zsh behaviour. The shell never hangs on tabcat.
 > bash is not supported as a plugin, and probably never will be — the REPL is
 > the answer there.
 
+## macOS overlay (variant 3, beta)
+
+A Swift launcher for the moment no terminal is open: press ⌥Space, an overlay
+appears with the same predictions, history search and directory ranking the
+plugin gets — served by the same daemon — and runs the command in a real
+pseudo terminal, feeding the result back so overlay usage improves the shared
+model. In daily use and solid, but young. What it does, how to build it and
+what is not built yet: [gui/macos/README.md](gui/macos/README.md).
+
 ## CLI
 
 | Command | Description |
@@ -292,6 +302,8 @@ src/
     executor.ts      # isolated shell execution with cwd persistence
     run.ts           # loop: prompt → execute → learn → prompt
   cli.ts             # repl / import / simulate / stats / names / daemon / plugin
+gui/
+  macos/             # Swift overlay app (beta): ⌥Space launcher over the daemon socket
 ```
 
 ## Development
@@ -309,4 +321,4 @@ The plugin is covered on three levels: the TSV wire format and the socket path a
 
 ## Status
 
-tabcat is young and evolving. The engine is feature-complete; the REPL is built and being polished. Feedback and contributions welcome.
+tabcat is young and evolving. The engine is feature-complete; the REPL and the zsh plugin are built and being polished. The macOS overlay ([gui/macos](gui/macos/README.md)) is in **beta**: in daily use and solid, with known gaps documented in its README. Feedback and contributions welcome.

@@ -1,9 +1,31 @@
 # tabcat overlay (macOS)
 
+<p>
+  <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-orange">
+  <img alt="macOS 26+" src="https://img.shields.io/badge/macOS-26%2B-black?logo=apple">
+  <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
+</p>
+
 A third front end next to the zsh plugin and the REPL, for the case where no
 terminal is open and one command needs to run: press ⌥Space, an overlay appears
 with a prompt and ghost text from the same engine, and the app you were working in
 stays frontmost.
+
+**Beta.** In daily use and solid at what it does, but young — expect rough
+edges. The known gaps are listed under [Not built yet](#the-list).
+
+## Quick start
+
+```sh
+cd gui/macos
+./bundle.sh                                          # → build/Tabcat.app
+killall TabcatGUI 2>/dev/null; open build/Tabcat.app
+```
+
+Press ⌥Space. Needs macOS 26, Swift 6.3 and a `tabcat` on `$PATH` — see
+[Requirements](#requirements). For development runs and diagnostics
+(`--check`, `--tables`, `--selftest`) see [Build and run](#build-and-run)
+and [Diagnosing](#diagnosing).
 
 What works: the global hotkey, the overlay, the directory chip row, the prompt with
 live predictions and a list that holds everything the daemon can say about the line,
