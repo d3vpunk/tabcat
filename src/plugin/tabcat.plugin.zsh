@@ -749,7 +749,7 @@ _tabcat_label_scoped() {
   _tabcat_esc "$PWD"; cwd=$REPLY
   _tabcat_esc "$line"; escaped=$REPLY
   _tabcat_esc "$handle"; escaped_handle=$REPLY
-  if _tabcat_request names $sub "$cwd" "$escaped_handle" "$escaped"; then
+  if _tabcat_request names "$sub" "$cwd" "$escaped_handle" "$escaped"; then
     if [[ $scope == global ]]; then
       zle -M "tabcat: 🌐$handle -> $line (everywhere)"
     else

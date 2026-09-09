@@ -61,6 +61,8 @@ tabcat ships an Ink-based smart prompt with ghost text and a scrolling dropdown:
 | `↑` / `↓` | Empty line: history (substring-filtered once you typed); otherwise: move in the dropdown |
 | `Ctrl+R` | Fuzzy history search |
 | `Ctrl+N` | Name this command (magic name) |
+| `Ctrl+G` | In the naming badge: switch between *this directory* and *everywhere* |
+| `Ctrl+S` | In the naming badge: save without running the command |
 | `Ctrl+X` | Forget the shown magic name |
 | `Ctrl+Backspace` | Delete one chunk · `Alt+Backspace` deletes fast |
 | `Ctrl+A/E/U/W/K/L` | Familiar readline shortcuts |
@@ -85,7 +87,9 @@ Long, hard-to-read commands get a short handle you assign yourself — no AI, no
 - **Create:** type the command, press `Ctrl+N`, type a handle (3–16 chars, `a-z 0-9`), Enter saves it *and* runs the command. Esc cancels without executing. Enter never blocks: an invalid or colliding handle just runs the command without saving.
 - **Use:** type the handle as the first word — it appears as the top suggestion with its resolution; `Tab` expands it (append args as usual). Typing the *exact* handle and pressing Enter runs the resolved command in one step. History always records the full command, never the handle.
 - **Discover:** when you type (or complete to) a command that already has a handle here, a ` ⚡ handle ` badge shows it — that's how you learn your own shortcuts.
-- **Scope:** a handle is bound to the directory it was created in and never surfaces elsewhere (relative paths stay safe).
+- **Scope:** a handle belongs to the directory it was created in and never surfaces elsewhere (relative paths stay safe). Press `Ctrl+G` in the badge to make it apply **everywhere** instead — right for commands without a place, like `claude --model haiku`. The badge says which one you are on: `⚡ here` or `🌐 GLOBAL`.
+- **Both at once:** the nearer handle wins. A local `dep` and a global `dep` can coexist — in the directory that defines the local one it resolves there, everywhere else to the global one. A name is only "taken" on the level you are naming on, so `Ctrl+G` can clear a red badge.
+- **Switching later:** type the handle, `Tab` to expand it, `Ctrl+N` to reopen the badge (handle and scope prefilled), `Ctrl+G`, then `Ctrl+S` — saves without running the command.
 - **Edit/delete:** `Ctrl+N` on a named command prefills the handle; clear it and press Enter to delete. Or press `Ctrl+X` whenever a magic name is in your way — on a selected ⚡ suggestion or the ⚡ badge — to forget it on the spot, without running anything.
 - `:names` lists your handles in the REPL, `tabcat names` on the CLI. Set `TABCAT_MAGIC_NAMES=0` to turn the feature off.
 
@@ -161,6 +165,7 @@ prefix keep working:
 | `Shift+Tab` | Undo the last accept |
 | `Enter` | Expand an exact magic-name handle, then run it |
 | `^Xl` | **L**abel: name the current command (magic name) |
+| `^XL` | **G**lobal label: name the current command for every directory |
 | `^Xf` | **F**orget the name of the current command |
 | `^Xq` | **Q**uery: fuzzy history search |
 | `^Xv` | Candidate menu — **v**iew all candidates (`compadd` + `menu-select`) |
@@ -172,7 +177,7 @@ prefix keep working:
 | `TABCAT_GHOST` | `1` | Ghost text on/off |
 | `TABCAT_BADGE` | `1` | ⚡ handle badge on/off — appears as soon as what you type leads to a named command, not only once the line is complete |
 | `TABCAT_GHOST_STYLE` | `fg=8` | Highlight of the ghost text |
-| `TABCAT_KEY_LABEL` / `_FORGET` / `_QUERY` / `_MENU` | `^Xl` / `^Xf` / `^Xq` / `^Xv` | Rebind the chords |
+| `TABCAT_KEY_LABEL` / `_LABEL_GLOBAL` / `_FORGET` / `_QUERY` / `_MENU` | `^Xl` / `^XL` / `^Xf` / `^Xq` / `^Xv` | Rebind the chords |
 | `TABCAT_TIMEOUT` | `0.05` | Seconds the shell waits for the daemon before falling back |
 | `TABCAT_NO_LEARN` | unset | Set to `1` to stop learning in this shell |
 | `TABCAT_SOCKET` | derived | Socket path (mirrors `tabcat daemon --socket`) |

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ein Magic-Name-Handle darf global gelten (`cwds: []`) statt nur im Verzeichnis seiner Entstehung — anlegbar über `^G` im REPL-Badge und `^Xg` im zsh-Plugin, umschaltbar ohne das Kommando auszuführen (`^S`).
+**Goal:** Ein Magic-Name-Handle darf global gelten (`cwds: []`) statt nur im Verzeichnis seiner Entstehung — anlegbar über `^G` im REPL-Badge und `^XL` im zsh-Plugin, umschaltbar ohne das Kommando auszuführen (`^S`).
 
 **Architecture:** Der Resolver kann den globalen Fall bereits (`cwds.length === 0`); es fehlt nur der Anlegeweg. `src/engine/names.ts` wird die **einzige** Stelle, die `cwds` interpretiert (`specificityOf`, `activeIn`) oder konstruiert (`makeName`, `appendTombstone`). Präzedenz ist ein Rang statt eines Booleans, damit die Repo-Subtree-Stufe aus `PLAN-cwd-cold-start.md` P2 später ein Zwischenwert bleibt. Kollisionen gelten nur innerhalb derselben Ebene.
 
@@ -36,7 +36,7 @@
 | `src/daemon/engine-host.ts` | Daemon-Namensoperationen | Task 5, 11 |
 | `src/daemon/protocol.ts` | `sub`-Werte | Task 11 |
 | `src/daemon/server.ts` | Dispatch | Task 11 |
-| `src/plugin/tabcat.plugin.zsh` | `^Xl` / `^Xg` | Task 12 |
+| `src/plugin/tabcat.plugin.zsh` | `^Xl` / `^XL` | Task 12 |
 | `README.md` | Tastentabellen, Magic-Names-Abschnitt | Task 13 |
 | `tests/engine/names-encapsulation.test.ts` | **Neu** — Guard gegen `cwds`-Leaks | Task 5 |
 
