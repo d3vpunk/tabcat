@@ -317,3 +317,28 @@ describe('names: precedence (local beats global)', () => {
     expect(scopeOf(index().nameFor(GLOBAL.line, OTHER)!)).toBe('global');
   });
 });
+
+describe('names: collisions apply within one level', () => {
+  const localDep = name({ name: 'dep', line: 'docker compose exec php composer install', cwds: [CWD] });
+  const globalHaiku = name({ name: 'haiku', line: 'claude --model haiku', cwds: [] });
+  const foreignDep = name({ name: 'dep', line: 'cargo build', cwds: [OTHER] });
+  const index = new NameIndex([localDep, globalHaiku, foreignDep]);
+
+  it('a new local handle is blocked only by handles of this very directory', () => {
+    expect(index.blockingHandles('here', CWD)).toEqual(['dep']);
+    // A global handle may legitimately be shadowed locally.
+    expect(index.blockingHandles('here', CWD)).not.toContain('haiku');
+  });
+
+  it('a new global handle is blocked only by global handles', () => {
+    expect(index.blockingHandles('global', CWD)).toEqual(['haiku']);
+    // The whole point: `haiku` may go global even though a local `dep`
+    // exists, and a local handle somewhere is never a global conflict.
+    expect(index.blockingHandles('global', CWD)).not.toContain('dep');
+  });
+
+  it('handles() keeps listing everything that applies here', () => {
+    expect(index.handles(CWD).sort()).toEqual(['dep', 'haiku']);
+    expect(index.handles(OTHER).sort()).toEqual(['dep', 'haiku']);
+  });
+});

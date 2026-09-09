@@ -182,6 +182,18 @@ export class NameIndex {
       .map((name) => name.name);
   }
 
+  /**
+   * Handles that block a new definition on THIS level.
+   * 'here'   → only those defined in this very cwd (a global handle may be
+   *            legitimately shadowed — local wins here anyway)
+   * 'global' → only the global ones (a local handle somewhere is no conflict)
+   */
+  blockingHandles(scope: NameScope, cwd: string): string[] {
+    return [...this.byLine.values()]
+      .filter((name) => (scope === 'global' ? isGlobal(name) : name.cwds.includes(cwd)))
+      .map((name) => name.name);
+  }
+
   all(): MagicName[] {
     return [...this.byLine.values()];
   }
