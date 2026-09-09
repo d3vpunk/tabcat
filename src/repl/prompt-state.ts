@@ -1,6 +1,12 @@
 import { RankedCandidate } from '../engine/predictor.js';
-import { NameIndex, validateHandle } from '../engine/names.js';
+import { NameIndex, NameScope, scopeOf, validateHandle } from '../engine/names.js';
 import { chunkAcceptEnd, nextBoundary, previousBoundary, previousChunkBoundary, previousWordBoundary } from './text-nav.js';
+
+/** Handle-in-progress plus the level it would be saved on (^G toggles). */
+export interface NamingState {
+  handle: string;
+  scope: NameScope;
+}
 
 /**
  * The complete prompt state as pure data + pure key handler.
@@ -35,10 +41,10 @@ export interface PromptState {
   wipLine: string;
   /**
    * null = not naming; otherwise the handle-in-progress of the Ctrl+N badge
-   * ('' = badge open and empty). The command line freezes while naming —
-   * only the handle is being edited.
+   * together with the scope it would be saved on ('' = badge open and empty).
+   * The command line freezes while naming — only the handle is being edited.
    */
-  naming: string | null;
+  naming: NamingState | null;
   /**
    * null = no multiline paste pending; otherwise the pasted block, verbatim.
    * The whole completion machinery is bypassed — Enter runs the block exactly
@@ -126,11 +132,12 @@ export type KeyOutcome =
   | { kind: 'clear'; state: PromptState }
   /**
    * saveName is only present when the submit came out of the naming badge:
-   * a valid handle = create/overwrite, '' = badge left empty (delete the
-   * handle if the command had one). Absent on every normal submit — and on a
-   * naming submit whose handle was invalid (execute, skip save).
+   * a valid handle = create/overwrite on its scope, an empty handle = badge
+   * left empty (delete the handle if the command had one). Absent on every
+   * normal submit — and on a naming submit whose handle was invalid
+   * (execute, skip save).
    */
-  | { kind: 'submit'; line: string; saveName?: string }
+  | { kind: 'submit'; line: string; saveName?: NamingState }
   /**
    * ^X on a surfaced magic name: delete the handle of `line` without
    * executing anything — the prompt stays open. Persistence (tombstone)
@@ -308,10 +315,11 @@ const anchorAfterAccept = (state: PromptState): PromptState =>
     ? { ...state, undoStack: [...state.undoStack, state.line], lastChangeWasAccept: false }
     : state;
 
-/** Handles in use, minus the one already owned by this line (renaming to itself is not a collision). */
-function existingHandles(state: PromptState, ctx: HandlerContext): string[] {
+/** Handles blocking this level, minus the one already owned by this line
+ *  (renaming to itself is not a collision). */
+function blockingFor(state: PromptState, ctx: HandlerContext, scope: NameScope): string[] {
   const own = ctx.names?.handleFor(state.line.trim(), ctx.cwd ?? '') ?? null;
-  return (ctx.names?.handles(ctx.cwd ?? '') ?? []).filter((handle) => handle !== own);
+  return (ctx.names?.blockingHandles(scope, ctx.cwd ?? '') ?? []).filter((handle) => handle !== own);
 }
 
 export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerContext): KeyOutcome {
@@ -329,27 +337,35 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
   // --- Naming badge (Ctrl+N) — the command line is frozen, only the handle
   // is edited. Dropdown navigation, history and Ctrl-R are disabled here. ---
   if (state.naming !== null) {
+    const { handle, scope } = state.naming;
     if (key.escape || (key.ctrl && input === 'c')) {
       return update({ ...state, naming: null });
+    }
+    // ^G: same handle, other level. The badge recomputes its collision hint,
+    // so a red "taken" can resolve by switching levels.
+    if (key.ctrl && input === 'g') {
+      return update({ ...state, naming: { handle, scope: scope === 'here' ? 'global' : 'here' } });
     }
     if (key.return) {
       // Enter never blocks: a valid handle saves, an empty badge signals
       // delete-if-named, anything invalid just executes without saving
       // (the badge already showed red beforehand).
-      if (state.naming === '') return { kind: 'submit', line: state.line, saveName: '' };
-      const valid = validateHandle(state.naming, state.line, existingHandles(state, ctx));
+      if (handle === '') return { kind: 'submit', line: state.line, saveName: { handle: '', scope } };
+      const valid = validateHandle(handle, state.line, blockingFor(state, ctx, scope));
       return valid !== null
-        ? { kind: 'submit', line: state.line, saveName: valid }
+        ? { kind: 'submit', line: state.line, saveName: { handle: valid, scope } }
         : { kind: 'submit', line: state.line };
     }
-    if (key.ctrl && input === 'u') return update({ ...state, naming: '' });
-    if (key.backspace || key.delete) return update({ ...state, naming: state.naming.slice(0, -1) });
+    if (key.ctrl && input === 'u') return update({ ...state, naming: { handle: '', scope } });
+    if (key.backspace || key.delete) {
+      return update({ ...state, naming: { handle: handle.slice(0, -1), scope } });
+    }
     if (input && !key.ctrl && !key.meta) {
       // Live filter: only a-z / 0-9 enter the badge (letters lowercased),
       // everything else is swallowed — the badge always holds a form-valid
       // handle-in-progress. Length is capped at 16.
       const filtered = input.toLowerCase().replace(/[^a-z0-9]/g, '');
-      return update({ ...state, naming: (state.naming + filtered).slice(0, 16) });
+      return update({ ...state, naming: { handle: (handle + filtered).slice(0, 16), scope } });
     }
     return update(state);
   }
@@ -402,7 +418,11 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
     if (ctx.names === undefined || state.line.trim() === '' || state.line.trimStart().startsWith(':')) {
       return update(state);
     }
-    return update({ ...state, naming: ctx.names.handleFor(state.line.trim(), ctx.cwd ?? '') ?? '' });
+    const existing = ctx.names.nameFor(state.line.trim(), ctx.cwd ?? '');
+    return update({
+      ...state,
+      naming: existing === null ? { handle: '', scope: 'here' } : { handle: existing.name, scope: scopeOf(existing) },
+    });
   }
   if (key.ctrl && input === 'x') {
     // Forget the selected suggestion right where it gets in the way. Nothing
