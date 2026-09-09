@@ -75,6 +75,15 @@ export function appendName(file: string, name: MagicName): boolean {
   }
 }
 
+/**
+ * Deletion marker for a command line, append-only. Its own function so that
+ * `cwds: []` means exactly one thing in the rest of the codebase: global.
+ * A deletion applies to the command, not to a level — which is why the
+ * tombstone carries no scope.
+ */
+export const appendTombstone = (file: string, line: string, ts: number): boolean =>
+  appendName(file, { name: '', line, cwds: [], ts });
+
 function tryLock(file: string): (() => void) | null {
   try {
     return lockfile.lockSync(file, { realpath: false, stale: 30_000 });

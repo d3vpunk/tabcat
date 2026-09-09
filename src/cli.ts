@@ -3,9 +3,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { CliArgumentError, commandUsage, parseCliArgs } from './cli-args.js';
 import { HistoryEntry } from './engine/model.js';
+import { formatNamesList } from './engine/names.js';
+import { namesFileFor, readNames } from './engine/names-store.js';
 import { Predictor } from './engine/predictor.js';
 import { detectShell } from './engine/shell.js';
-import { namesFileFor, readNames } from './engine/names-store.js';
 import { MAX_HISTORY_ENTRIES, appendHistory, dedupeImportEntries, defaultHistoryFile, readHistory } from './engine/store.js';
 import { AlreadyRunningError, startDaemon } from './daemon/server.js';
 import { pingDaemon, shutdownDaemon } from './daemon/client.js';
@@ -156,8 +157,7 @@ switch (args.command) {
       console.log('No magic names yet — press Ctrl-N on a typed command in the REPL to create one.');
       break;
     }
-    const width = Math.max(...names.map((name) => name.name.length));
-    for (const name of names) console.log(`${name.name.padEnd(width)}  ${name.line}`);
+    for (const row of formatNamesList(names)) console.log(row);
     break;
   }
 

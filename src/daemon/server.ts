@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server, Socket, createServer } from 'node:net';
 import { FsLike } from '../engine/fs-completer.js';
+import { NameScope } from '../engine/names.js';
 import { RankedCandidate } from '../engine/predictor.js';
 import { SETTINGS, SettingSpec, parseInput, specFor } from '../settings/schema.js';
 import { clearSetting, readSettings, settingsFileFor, writeSetting } from '../settings/store.js';
@@ -365,8 +366,9 @@ function handleLine(line: string, host: EngineHost, options: DaemonOptions): Lin
       if (request.sub === 'resolve') {
         return { response: ok(request.id, host.resolveHandle(request.name, request.cwd)) };
       }
-      if (request.sub === 'create') {
-        const result = host.namesCreate(request.name, request.line, request.cwd);
+      if (request.sub === 'create' || request.sub === 'create-global') {
+        const scope: NameScope = request.sub === 'create-global' ? 'global' : 'here';
+        const result = host.namesCreate(request.name, request.line, request.cwd, scope);
         return {
           response: result.created
             ? ok(request.id, 'created')

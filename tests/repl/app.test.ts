@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ReplOutput, acceptedLineFor, clampMinimalDisplay, extractPaste, homeEndKey, isMultilinePaste, legendVisible, lineWindow, magicCandidates, magicCommandHints, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { ReplOutput, acceptedLineFor, clampMinimalDisplay, extractPaste, homeEndKey, isMultilinePaste, legendVisible, lineWindow, magicCandidates, magicCommandHints, namingBadge, namingIssueFor, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { NameIndex, makeName } from '../../src/engine/names.js';
 import { PromptState, handleKey, initialPromptState } from '../../src/repl/prompt-state.js';
-import { handleReplCommand, isInteractiveTerminal } from '../../src/repl/run.js';
+import { handleReplCommand, isInteractiveTerminal, persistForget, persistName } from '../../src/repl/run.js';
 
 describe('REPL environment', () => {
   it('accepts only input and output with TTY', () => {
@@ -130,9 +131,9 @@ describe('REPL commands', () => {
     expect(output[0]).toEqual({
       kind: 'names',
       names: [
-        { name: 'everywhere', line: 'cmd-c', active: true },
-        { name: 'here', line: 'cmd-b', active: true },
-        { name: 'elsewhere', line: 'cmd-a', active: false },
+        { name: 'everywhere', line: 'cmd-c', active: true, scope: 'global' },
+        { name: 'here', line: 'cmd-b', active: true, scope: 'here' },
+        { name: 'elsewhere', line: 'cmd-a', active: false, scope: 'here' },
       ],
     });
   });
@@ -141,6 +142,35 @@ describe('REPL commands', () => {
     const output: ReplOutput[] = [];
     expect(handleReplCommand(':names', { ...context, showOutput: (value) => output.push(value) })).toBe('handled');
     expect(output[0]).toEqual({ kind: 'names', names: [] });
+  });
+
+  describe(':names reports the scope', () => {
+    const CWD = '/home/dev/project';
+
+    it('hands the panel a scope per handle', () => {
+      const output: ReplOutput[] = [];
+      const names = [
+        { name: 'haiku', line: 'claude --model haiku', cwds: [], ts: 2 },
+        { name: 'dep', line: 'docker compose exec php composer install', cwds: [CWD], ts: 1 },
+      ];
+
+      expect(handleReplCommand(':names', { ...context, cwd: CWD, names, showOutput: (v) => output.push(v) })).toBe('handled');
+      expect(output[0]).toEqual({
+        kind: 'names',
+        names: [
+          { name: 'haiku', line: 'claude --model haiku', active: true, scope: 'global' },
+          { name: 'dep', line: 'docker compose exec php composer install', active: true, scope: 'here' },
+        ],
+      });
+    });
+
+    it('keeps a foreign handle listed but inactive', () => {
+      const output: ReplOutput[] = [];
+      const names = [{ name: 'dep', line: 'cargo build', cwds: ['/elsewhere'], ts: 1 }];
+
+      handleReplCommand(':names', { ...context, cwd: CWD, names, showOutput: (v) => output.push(v) });
+      expect(output[0]).toMatchObject({ names: [{ name: 'dep', active: false, scope: 'here' }] });
+    });
   });
 
   it('acceptedLineFor previews the replace-prefix accept (discovery badge)', () => {
@@ -410,5 +440,101 @@ describe('Long line window (lineWindow)', () => {
   it('ghostRemain is positive when cursor is at end of line and space in window', () => {
     const win = lineWindow('git', 3, 80);
     expect(win.ghostRemain).toBe(77);
+  });
+});
+
+describe('naming badge', () => {
+  const CWD = '/home/dev/project';
+  const LONG = 'docker compose run php vendor/bin/phpstan analyze src';
+
+  it('marks the level it would save on', () => {
+    expect(namingBadge({ handle: 'haiku', scope: 'here' }, null).marker).toBe('⚡');
+    expect(namingBadge({ handle: 'haiku', scope: 'global' }, null).marker).toBe('🌐');
+  });
+
+  it('offers the opposite level in the hint', () => {
+    expect(namingBadge({ handle: 'haiku', scope: 'here' }, null).hint).toContain('^G: global');
+    expect(namingBadge({ handle: 'haiku', scope: 'global' }, null).hint).toContain('^G: here only');
+  });
+
+  it('always advertises both commit keys and the character filter', () => {
+    const { hint } = namingBadge({ handle: 'haiku', scope: 'here' }, null);
+    expect(hint).toContain('^S: save');
+    expect(hint).toContain('enter: save+run');
+    // Input outside a-z 0-9 is dropped silently — the hint is the only place
+    // that says so.
+    expect(hint).toContain('a-z 0-9');
+  });
+
+  it('appends the reason a save would be skipped', () => {
+    expect(namingBadge({ handle: 'dep', scope: 'here' }, 'taken').hint).toContain('taken');
+    expect(namingBadge({ handle: 'docker', scope: 'here' }, 'command').hint).toContain('= command name');
+  });
+
+  it('reports a collision only on the level being named on', () => {
+    const index = new NameIndex([{ name: 'dep', line: 'other command', cwds: [CWD], ts: 1 }]);
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, index)).toBe('taken');
+    // Going global with a locally taken handle is the whole point.
+    expect(namingIssueFor({ handle: 'dep', scope: 'global' }, LONG, CWD, index)).toBeNull();
+  });
+
+  it('renaming a command to its own handle is no collision', () => {
+    const index = new NameIndex([{ name: 'dep', line: LONG, cwds: [CWD], ts: 1 }]);
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, index)).toBeNull();
+  });
+
+  it('another command carrying the same handle still collides', () => {
+    // The exception must be identity-based: `dep` names two different
+    // commands here, one locally and one globally.
+    const HAIKU = 'claude --model haiku';
+    const index = new NameIndex([
+      { name: 'dep', line: LONG, cwds: [CWD], ts: 1 },
+      { name: 'dep', line: HAIKU, cwds: [], ts: 2 },
+    ]);
+    // Naming the global command `dep` here would repoint `dep` in this directory.
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, HAIKU, CWD, index)).toBe('taken');
+    // Taking the local command global would shadow the global `dep` everywhere.
+    expect(namingIssueFor({ handle: 'dep', scope: 'global' }, LONG, CWD, index)).toBe('taken');
+    // The exception still holds for the record's own level.
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, index)).toBeNull();
+  });
+
+  it('stays quiet on an empty badge and without an index', () => {
+    expect(namingIssueFor({ handle: '', scope: 'here' }, LONG, CWD, new NameIndex())).toBeNull();
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, undefined)).toBeNull();
+  });
+});
+
+describe('REPL name persistence', () => {
+  const CWD = '/home/dev/project';
+  const FILE = '/tmp/names.jsonl';
+  const haiku = makeName('haiku', 'claude --model haiku', 'global', CWD, 1);
+
+  it('adopts a handle only after the write landed', () => {
+    const index = new NameIndex();
+    expect(persistName(index, FILE, haiku, { append: () => false })).toBe(false);
+    // A busy lock must leave nothing behind: an in-memory handle would work
+    // for this session and be gone after the next start.
+    expect(index.has(haiku.line)).toBe(false);
+
+    expect(persistName(index, FILE, haiku, { append: () => true })).toBe(true);
+    expect(index.handleFor(haiku.line, CWD)).toBe('haiku');
+  });
+
+  it('keeps a handle when the tombstone could not be written', () => {
+    const index = new NameIndex([haiku]);
+    expect(persistForget(index, FILE, haiku.line, 2, { tombstone: () => false })).toBe(false);
+    expect(index.has(haiku.line)).toBe(true);
+
+    expect(persistForget(index, FILE, haiku.line, 2, { tombstone: () => true })).toBe(true);
+    expect(index.has(haiku.line)).toBe(false);
+  });
+
+  it('an unnamed line is nothing to forget, not a failure', () => {
+    const index = new NameIndex();
+    const tombstone = () => {
+      throw new Error('must not write a tombstone for an unnamed line');
+    };
+    expect(persistForget(index, FILE, 'ls -la', 2, { tombstone })).toBe(true);
   });
 });

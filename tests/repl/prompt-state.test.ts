@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MagicName, NameIndex } from '../../src/engine/names.js';
+import { MagicName, NameIndex, NameScope } from '../../src/engine/names.js';
 import { RankedCandidate } from '../../src/engine/predictor.js';
 import {
   HandlerContext,
   KeyEvent,
+  NamingState,
   PromptState,
   enterPasteMode,
   handleKey,
@@ -533,16 +534,18 @@ describe('Prompt state: magic names (Ctrl+N badge)', () => {
   const magicCtx = (index: NameIndex, overrides: Partial<HandlerContext> = {}): HandlerContext =>
     ctx({ names: index, cwd: CWD, ...overrides });
 
-  const typedState = (line: string, naming: string | null = null): PromptState => ({
+  const naming = (handle: string, scope: NameScope = 'here'): NamingState => ({ handle, scope });
+
+  const typedState = (line: string, namingState: NamingState | null = null): PromptState => ({
     ...initialPromptState,
     line,
     cursor: line.length,
-    naming,
+    naming: namingState,
   });
 
   it('Ctrl+N opens an empty badge on a typed command', () => {
     const state = press(typedState(LONG), key('n', { ctrl: true }), magicCtx(names()));
-    expect(state.naming).toBe('');
+    expect(state.naming).toEqual(naming(''));
     expect(state.line).toBe(LONG);
   });
 
@@ -561,69 +564,169 @@ describe('Prompt state: magic names (Ctrl+N badge)', () => {
   it('Ctrl+N prefills the existing handle of a named command', () => {
     const index = names([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
     const state = press(typedState(LONG), key('n', { ctrl: true }), magicCtx(index));
-    expect(state.naming).toBe('phpstananalyze');
+    expect(state.naming).toEqual(naming('phpstananalyze'));
   });
 
   it('badge input is live-filtered: lowercased, alphanumeric only, capped at 16', () => {
-    let state = typedState(LONG, '');
+    let state = typedState(LONG, naming(''));
     state = press(state, key('P'), magicCtx(names()));
     state = press(state, key('h'), magicCtx(names()));
     state = press(state, key('-'), magicCtx(names()));
     state = press(state, key(' '), magicCtx(names()));
     state = press(state, key('9'), magicCtx(names()));
-    expect(state.naming).toBe('ph9');
+    expect(state.naming).toEqual(naming('ph9'));
     expect(state.line).toBe(LONG); // command line frozen
 
-    const long = press(typedState(LONG, 'a'.repeat(16)), key('x'), magicCtx(names()));
-    expect(long.naming).toBe('a'.repeat(16));
+    const long = press(typedState(LONG, naming('a'.repeat(16))), key('x'), magicCtx(names()));
+    expect(long.naming).toEqual(naming('a'.repeat(16)));
   });
 
   it('backspace edits and Ctrl+U clears the badge', () => {
-    expect(press(typedState(LONG, 'abc'), key('', { backspace: true }), magicCtx(names())).naming).toBe('ab');
-    expect(press(typedState(LONG, 'abc'), key('u', { ctrl: true }), magicCtx(names())).naming).toBe('');
+    expect(press(typedState(LONG, naming('abc')), key('', { backspace: true }), magicCtx(names())).naming).toEqual(
+      naming('ab'),
+    );
+    expect(press(typedState(LONG, naming('abc')), key('u', { ctrl: true }), magicCtx(names())).naming).toEqual(
+      naming(''),
+    );
   });
 
   it('dropdown/history keys are swallowed while naming', () => {
     const context = magicCtx(names(), { candidates: [candidate('x')], recentUnique: ['ls'] });
     for (const event of [key('', { upArrow: true }), key('', { downArrow: true }), key('r', { ctrl: true }), key('', { tab: true })]) {
-      const state = press(typedState(LONG, 'abc'), event, context);
-      expect(state.naming).toBe('abc');
+      const state = press(typedState(LONG, naming('abc')), event, context);
+      expect(state.naming).toEqual(naming('abc'));
       expect(state.line).toBe(LONG);
     }
   });
 
   it('Esc cancels naming without executing', () => {
-    const outcome = handleKey(typedState(LONG, 'abc'), key('', { escape: true }), magicCtx(names()));
+    const outcome = handleKey(typedState(LONG, naming('abc')), key('', { escape: true }), magicCtx(names()));
     expect(outcome).toMatchObject({ kind: 'update', state: { naming: null, line: LONG } });
   });
 
   it('Enter with a valid handle submits with saveName', () => {
-    const outcome = handleKey(typedState(LONG, 'phpstananalyze'), key('', { return: true }), magicCtx(names()));
-    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: 'phpstananalyze' });
+    const outcome = handleKey(typedState(LONG, naming('phpstananalyze')), key('', { return: true }), magicCtx(names()));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: naming('phpstananalyze') });
   });
 
   it('Enter with an empty badge submits with saveName "" (delete-if-named)', () => {
-    const outcome = handleKey(typedState(LONG, ''), key('', { return: true }), magicCtx(names()));
-    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: '' });
+    const outcome = handleKey(typedState(LONG, naming('')), key('', { return: true }), magicCtx(names()));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: naming('') });
   });
 
   it('Enter with an invalid handle executes but skips the save', () => {
     for (const bad of ['ab', 'docker']) {
-      const outcome = handleKey(typedState(LONG, bad), key('', { return: true }), magicCtx(names()));
+      const outcome = handleKey(typedState(LONG, naming(bad)), key('', { return: true }), magicCtx(names()));
       expect(outcome).toEqual({ kind: 'submit', line: LONG });
     }
   });
 
   it('Enter with a colliding handle skips the save', () => {
     const index = names([{ name: 'deploy', line: 'other cmd', cwds: [CWD], ts: 1 }]);
-    const outcome = handleKey(typedState(LONG, 'deploy'), key('', { return: true }), magicCtx(index));
+    const outcome = handleKey(typedState(LONG, naming('deploy')), key('', { return: true }), magicCtx(index));
     expect(outcome).toEqual({ kind: 'submit', line: LONG });
   });
 
   it('re-saving the own handle of a command is not a collision', () => {
     const index = names([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
-    const outcome = handleKey(typedState(LONG, 'phpstananalyze'), key('', { return: true }), magicCtx(index));
-    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: 'phpstananalyze' });
+    const outcome = handleKey(typedState(LONG, naming('phpstananalyze')), key('', { return: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: naming('phpstananalyze') });
+  });
+
+  it('a handle another command owns on this level blocks the save', () => {
+    // `dep` names two different commands — locally the long one, globally
+    // `claude --model haiku`. Saving must not silently repoint either.
+    const HAIKU = 'claude --model haiku';
+    const index = names([
+      { name: 'dep', line: LONG, cwds: [CWD], ts: 1 },
+      { name: 'dep', line: HAIKU, cwds: [], ts: 2 },
+    ]);
+    expect(handleKey(typedState(HAIKU, naming('dep')), key('', { return: true }), magicCtx(index))).toEqual({
+      kind: 'submit',
+      line: HAIKU,
+    });
+    expect(handleKey(typedState(LONG, naming('dep', 'global')), key('', { return: true }), magicCtx(index))).toEqual({
+      kind: 'submit',
+      line: LONG,
+    });
+    // Its own level still saves — the exception is about identity, not name.
+    expect(handleKey(typedState(LONG, naming('dep')), key('', { return: true }), magicCtx(index))).toEqual({
+      kind: 'submit',
+      line: LONG,
+      saveName: naming('dep'),
+    });
+  });
+
+  it('Ctrl+G toggles the scope of the open badge and keeps the handle', () => {
+    let state = typedState(LONG, naming('haiku'));
+    state = press(state, key('g', { ctrl: true }), magicCtx(names()));
+    expect(state.naming).toEqual(naming('haiku', 'global'));
+    state = press(state, key('g', { ctrl: true }), magicCtx(names()));
+    expect(state.naming).toEqual(naming('haiku', 'here'));
+  });
+
+  it('Ctrl+G outside the badge stays a no-op', () => {
+    const state = press(typedState(LONG), key('g', { ctrl: true }), magicCtx(names()));
+    expect(state.naming).toBeNull();
+    expect(state.line).toBe(LONG);
+  });
+
+  it('Ctrl+N prefills handle AND scope of a global handle', () => {
+    const index = names([{ name: 'haiku', line: LONG, cwds: [], ts: 1 }]);
+    const state = press(typedState(LONG), key('n', { ctrl: true }), magicCtx(index));
+    expect(state.naming).toEqual(naming('haiku', 'global'));
+  });
+
+  it('submitting carries the scope', () => {
+    const outcome = handleKey(typedState(LONG, naming('haiku', 'global')), key('', { return: true }), magicCtx(names()));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: naming('haiku', 'global') });
+  });
+
+  it('a handle taken on the other level does not block', () => {
+    // `dep` exists locally; going global with it must be allowed.
+    const index = names([{ name: 'dep', line: 'other command', cwds: [CWD], ts: 1 }]);
+    const outcome = handleKey(typedState(LONG, naming('dep', 'global')), key('', { return: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: naming('dep', 'global') });
+  });
+
+  it('a handle taken on the same level still blocks the save', () => {
+    const index = names([{ name: 'dep', line: 'other command', cwds: [CWD], ts: 1 }]);
+    const outcome = handleKey(typedState(LONG, naming('dep', 'here')), key('', { return: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'submit', line: LONG });
+  });
+
+  it('Ctrl+S saves without executing and closes the badge', () => {
+    const outcome = handleKey(typedState(LONG, naming('haiku', 'global')), key('s', { ctrl: true }), magicCtx(names()));
+    expect(outcome).toEqual({
+      kind: 'name',
+      line: LONG,
+      saveName: naming('haiku', 'global'),
+      state: expect.objectContaining({ naming: null, line: LONG }),
+    });
+  });
+
+  it('Ctrl+S on an empty badge is a forget, not a second delete path', () => {
+    const index = names([{ name: 'haiku', line: LONG, cwds: [], ts: 1 }]);
+    const outcome = handleKey(typedState(LONG, naming('')), key('s', { ctrl: true }), magicCtx(index));
+    expect(outcome).toEqual({
+      kind: 'forget',
+      line: LONG,
+      state: expect.objectContaining({ naming: null }),
+    });
+  });
+
+  it('Ctrl+S on an empty badge leaves a handle from another directory alone', () => {
+    // The badge is empty because the prefill is cwd-scoped, and deleting is
+    // global — ^S must not drop a handle the user was never shown.
+    const index = names([{ name: 'haiku', line: LONG, cwds: ['/elsewhere'], ts: 1 }]);
+    const outcome = handleKey(typedState(LONG, naming('')), key('s', { ctrl: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'update', state: expect.objectContaining({ naming: null }) });
+  });
+
+  it('Ctrl+S with an invalid handle saves nothing and keeps the badge open', () => {
+    // No execution hides the failure here, so the badge must stay put.
+    const outcome = handleKey(typedState(LONG, naming('ab')), key('s', { ctrl: true }), magicCtx(names()));
+    expect(outcome).toEqual({ kind: 'update', state: expect.objectContaining({ naming: naming('ab') }) });
   });
 
   it('exact handle + Enter submits the resolved command', () => {
@@ -722,9 +825,9 @@ describe('Prompt state: forget magic name (Ctrl+X)', () => {
   });
 
   it('Ctrl+X while naming or searching is swallowed', () => {
-    const namingState = typedState(LONG, { naming: 'abc' });
+    const namingState = typedState(LONG, { naming: { handle: 'abc', scope: 'here' } });
     const namingOutcome = handleKey(namingState, key('x', { ctrl: true }), ctx({ names: named(), cwd: CWD }));
-    expect(namingOutcome).toMatchObject({ kind: 'update', state: { naming: 'abc' } });
+    expect(namingOutcome).toMatchObject({ kind: 'update', state: { naming: { handle: 'abc', scope: 'here' } } });
 
     const searchState = typedState(LONG, { searchQuery: 'git' });
     const searchOutcome = handleKey(searchState, key('x', { ctrl: true }), ctx({ names: named(), cwd: CWD }));

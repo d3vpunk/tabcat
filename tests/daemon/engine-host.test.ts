@@ -240,25 +240,48 @@ describe('EngineHost: magic names', () => {
 
   it('creates, lists and resolves a handle', () => {
     const engine = host();
-    expect(engine.namesCreate('dep', 'docker compose up -d', '/work')).toEqual({ created: true });
+    expect(engine.namesCreate('dep', 'docker compose up -d', '/work', 'here')).toEqual({ created: true });
     expect(engine.namesList('/work').map((n) => n.name)).toEqual(['dep']);
     expect(magicInserts(engine, 'de')).toEqual(['docker compose up -d']);
   });
 
   it('rejects a handle that is taken or shadows the program name', () => {
     const engine = host();
-    engine.namesCreate('dep', 'docker compose up -d', '/work');
-    expect(engine.namesCreate('dep', 'git push', '/work')).toEqual({ created: false, reason: 'taken' });
-    expect(engine.namesCreate('git', 'git push', '/work')).toEqual({ created: false, reason: 'command' });
+    engine.namesCreate('dep', 'docker compose up -d', '/work', 'here');
+    expect(engine.namesCreate('dep', 'git push', '/work', 'here')).toEqual({ created: false, reason: 'taken' });
+    expect(engine.namesCreate('git', 'git push', '/work', 'here')).toEqual({ created: false, reason: 'command' });
   });
 
   it('deletes via tombstone and reports an unknown line', () => {
     const engine = host();
-    engine.namesCreate('dep', 'docker compose up -d', '/work');
+    engine.namesCreate('dep', 'docker compose up -d', '/work', 'here');
     expect(engine.namesDelete('docker compose up -d')).toBe(true);
     expect(engine.namesList('/work')).toEqual([]);
     expect(readFileSync(namesFile, 'utf8')).toContain('"name":""');
     expect(engine.namesDelete('never named')).toBe(false);
+  });
+
+  it('creates a global handle that resolves from any directory', () => {
+    const engine = host();
+    expect(engine.namesCreate('haiku', 'claude --model haiku', '/projects/a', 'global').created).toBe(true);
+    expect(engine.resolveHandle('haiku', '/projects/b')).toBe('claude --model haiku');
+  });
+
+  it('a local handle elsewhere does not block going global', () => {
+    const engine = host();
+    engine.namesCreate('dep', 'cargo build', '/projects/a', 'here');
+    expect(engine.namesCreate('dep', 'npm ci', '/projects/b', 'global').created).toBe(true);
+    expect(engine.resolveHandle('dep', '/projects/a')).toBe('cargo build');
+    expect(engine.resolveHandle('dep', '/projects/b')).toBe('npm ci');
+  });
+
+  it('a handle taken on the same level is still rejected', () => {
+    const engine = host();
+    engine.namesCreate('haiku', 'claude --model haiku', '/projects/a', 'global');
+    expect(engine.namesCreate('haiku', 'other command', '/projects/b', 'global')).toEqual({
+      created: false,
+      reason: 'taken',
+    });
   });
 
   it('picks up a handle another process created, without a rebuild', () => {

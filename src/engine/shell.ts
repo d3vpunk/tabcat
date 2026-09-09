@@ -43,10 +43,20 @@ export const zshShell: ShellAdapter = {
   // — without the function bodies the alias breaks with "command not found".
   snapshotArgs: (outputFile) => {
     const out = quote(outputFile);
-    return ['-ic', `alias -L > ${out}; for fn in \${(k)functions:#_*}; do typeset -f -- "$fn"; done >> ${out}`];
+    // Functions FIRST, aliases after. zsh refuses to define a function whose
+    // name is currently an alias — and `run-help` is both a built-in default
+    // alias and a routinely autoloaded function. With the aliases up front,
+    // that collision aborts the parse and EVERY later definition in the file
+    // is silently lost.
+    return ['-ic', `for fn in \${(k)functions:#_*}; do typeset -f -- "$fn"; done > ${out}; alias -L >> ${out}`];
   },
   execArgs: (script) => ['-fc', script],
-  execPreamble: '',
+  // `zsh -f` still carries its built-in aliases (`run-help`, `which-command`),
+  // so the snapshot's function definitions for those very names would fail to
+  // parse. Dropping them first costs nothing: the snapshot re-declares every
+  // alias the interactive shell had, these two included. Silent when nothing
+  // matches, which matters because the exec shell inherits stdio.
+  execPreamble: "unalias -m '*'",
   historyPreamble: (historyFile, size) => `HISTSIZE=${size}; fc -R ${quote(historyFile)} 2>/dev/null || true`,
   defaultHistoryPath: (homeDir) => `${homeDir}/.zsh_history`,
   parseHistory: parseZshHistory,

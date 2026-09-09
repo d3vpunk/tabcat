@@ -173,6 +173,23 @@ describe.skipIf(!zsh)('plugin against a live daemon', () => {
     expect(readFileSync(join(dir, 'names.jsonl'), 'utf8')).toContain('"name":"dep"');
   });
 
+  it('a global handle resolves from any directory', async () => {
+    await startRealDaemon();
+    const { stdout } = await run(`
+      local REPLY cwd_a cwd_b handle line
+      _tabcat_esc /projects/a; cwd_a=$REPLY
+      _tabcat_esc /projects/b; cwd_b=$REPLY
+      _tabcat_esc haiku; handle=$REPLY
+      _tabcat_esc "claude --dangerously-skip-permissions --model haiku"; line=$REPLY
+      _tabcat_request names create-global $cwd_a $handle $line || { print "CREATE FAILED"; return 1 }
+      _tabcat_request names resolve $cwd_b $handle '' || { print "RESOLVE FAILED"; return 1 }
+      local -a header=("\${(@ps:\\t:)_TABCAT_ROWS[1]}")
+      _tabcat_dec \${header[3]}
+      print -rn -- "\${REPLY}${ROW}"
+    `);
+    expect(splitRows(stdout)).toEqual(['claude --dangerously-skip-permissions --model haiku']);
+  });
+
   it('shows the handle badge in the predict header', async () => {
     writeHistory(entry('docker compose up -d'), entry('docker compose up -d', 1_700_000_000_001));
     await startRealDaemon();

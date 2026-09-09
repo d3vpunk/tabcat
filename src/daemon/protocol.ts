@@ -37,7 +37,7 @@ export type DaemonRequest =
   | { op: 'shutdown'; id: string }
   | { op: 'predict'; id: string; limit: number; cursor: number; cwd: string; line: string }
   | { op: 'learn'; id: string; exitCode: number; ts: number; cwd: string; line: string }
-  | { op: 'names'; id: string; sub: 'list' | 'create' | 'delete' | 'resolve'; cwd: string; name: string; line: string }
+  | { op: 'names'; id: string; sub: 'list' | 'create' | 'create-global' | 'delete' | 'resolve'; cwd: string; name: string; line: string }
   | { op: 'search'; id: string; limit: number; cwd: string; query: string }
   // No cwd either: forgetting is global by design. The user said "never
   // suggest this again", and a line forgotten only for one directory would
@@ -227,14 +227,16 @@ export function parseRequest(rawLine: string): ParseResult {
     }
     case 'names': {
       const sub = fields[3] ?? '';
-      if (sub !== 'list' && sub !== 'create' && sub !== 'delete' && sub !== 'resolve') {
+      if (sub !== 'list' && sub !== 'create' && sub !== 'create-global' && sub !== 'delete' && sub !== 'resolve') {
         return fail(rawId, 'bad_value', `unknown names op: ${truncate(sub)}`);
       }
       const cwd = value(4);
       if (cwd === '') return fail(rawId, 'bad_value', 'cwd must not be empty');
       const name = value(5);
       const line = value(6);
-      if (sub === 'create') {
+      // A scope rides in the sub, not in an eighth field: FIELD_COUNT is
+      // checked strictly and the Swift GUI sends exactly 7 fields.
+      if (sub === 'create' || sub === 'create-global') {
         if (!HANDLE_PATTERN.test(name)) return fail(rawId, 'bad_value', `invalid handle: ${truncate(name)}`);
         if (line.trim() === '') return fail(rawId, 'bad_value', 'line must not be empty');
       }

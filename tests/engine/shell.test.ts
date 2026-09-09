@@ -54,9 +54,12 @@ describe('resolveShellPath', () => {
 });
 
 describe('ShellAdapter', () => {
-  it('bash needs expand_aliases in the exec script, zsh does not', () => {
+  it('bash needs expand_aliases, zsh needs its default aliases out of the way', () => {
     expect(bashShell.execPreamble).toContain('expand_aliases');
-    expect(zshShell.execPreamble).toBe('');
+    // `zsh -f` still carries `run-help` and `which-command`. They must go before
+    // the snapshot is sourced, or its function definitions for those same names
+    // cannot be parsed — and everything after the first collision is lost.
+    expect(zshShell.execPreamble).toContain('unalias -m');
   });
 
   it('history paths per shell', () => {
@@ -69,9 +72,12 @@ describe('ShellAdapter', () => {
     // function dump (typeset -f / declare -f) makes function-backed commands
     // work, and completion/internal `_*` functions are filtered out.
     const zsh = zshShell.snapshotArgs('/tmp/snap').join(' ');
-    expect(zsh).toContain("alias -L > '/tmp/snap'");
     expect(zsh).toContain('typeset -f');
     expect(zsh).toContain(':#_*');
+    // Functions are written FIRST and the aliases appended, because zsh cannot
+    // define a function whose name is already an alias.
+    expect(zsh).toContain("alias -L >> '/tmp/snap'");
+    expect(zsh.indexOf('typeset -f')).toBeLessThan(zsh.indexOf('alias -L'));
 
     const bash = bashShell.snapshotArgs('/tmp/snap').join(' ');
     expect(bash).toContain("alias -p > '/tmp/snap'");

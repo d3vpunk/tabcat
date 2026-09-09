@@ -40,6 +40,7 @@ autoload -Uz add-zsh-hook read-from-minibuffer
 # key is taken by zsh itself, so two-stroke chords are the price of not
 # breaking anyone's muscle memory.
 : ${TABCAT_KEY_LABEL:='^Xl'}
+: ${TABCAT_KEY_LABEL_GLOBAL:='^XL'}
 : ${TABCAT_KEY_FORGET:='^Xf'}
 : ${TABCAT_KEY_QUERY:='^Xq'}
 : ${TABCAT_KEY_MENU:='^Xv'}
@@ -723,8 +724,10 @@ tabcat-accept-line() {
   zle .accept-line
 }
 
-tabcat-label() {
+# $1: 'here' (default) or 'global' — decides the daemon sub, nothing else.
+_tabcat_label_scoped() {
   emulate -L zsh
+  local scope=${1:-here}
   local line=$BUFFER
   if [[ -z ${line//[[:space:]]/} ]]; then
     zle -M "tabcat: nothing to name"
@@ -732,26 +735,35 @@ tabcat-label() {
   fi
   local REPLY
   local _TABCAT_IN_PROMPT=1
-  read-from-minibuffer "tabcat handle (3-16, a-z0-9): " || return
+  local label="tabcat handle (3-16, a-z0-9): "
+  [[ $scope == global ]] && label="tabcat handle, global (3-16, a-z0-9): "
+  read-from-minibuffer "$label" || return
   local handle=${REPLY//[[:space:]]/}
   [[ -z $handle ]] && return
   if [[ ! $handle =~ '^[a-z][a-z0-9]{2,15}$' ]]; then
     zle -M "tabcat: '$handle' is not a valid handle (start with a letter, 3-16 of a-z0-9)"
     return
   fi
-  local cwd escaped
+  local cwd escaped escaped_handle sub=create
+  [[ $scope == global ]] && sub=create-global
   _tabcat_esc "$PWD"; cwd=$REPLY
   _tabcat_esc "$line"; escaped=$REPLY
-  local escaped_handle
   _tabcat_esc "$handle"; escaped_handle=$REPLY
-  if _tabcat_request names create "$cwd" "$escaped_handle" "$escaped"; then
-    zle -M "tabcat: ⚡$handle -> $line"
+  if _tabcat_request names "$sub" "$cwd" "$escaped_handle" "$escaped"; then
+    if [[ $scope == global ]]; then
+      zle -M "tabcat: 🌐$handle -> $line (everywhere)"
+    else
+      zle -M "tabcat: ⚡$handle -> $line"
+    fi
   else
     local -a header=("${(@ps:\t:)_TABCAT_ROWS[1]:-}")
     zle -M "tabcat: handle rejected (${header[4]:-no daemon})"
   fi
   _tabcat_ghost
 }
+
+tabcat-label() { _tabcat_label_scoped here }
+tabcat-label-global() { _tabcat_label_scoped global }
 
 tabcat-forget() {
   emulate -L zsh
@@ -1050,6 +1062,7 @@ _tabcat_setup() {
   zle -N tabcat-undo-accept
   zle -N tabcat-accept-line
   zle -N tabcat-label
+  zle -N tabcat-label-global
   zle -N tabcat-forget
   zle -N tabcat-query
   # The candidate menu is optional: without zsh/complist there is no
@@ -1072,6 +1085,7 @@ _tabcat_setup() {
 
   local -A chords=(
     [$TABCAT_KEY_LABEL]=tabcat-label
+    [$TABCAT_KEY_LABEL_GLOBAL]=tabcat-label-global
     [$TABCAT_KEY_FORGET]=tabcat-forget
     [$TABCAT_KEY_QUERY]=tabcat-query
     [$TABCAT_KEY_MENU]=tabcat-menu
