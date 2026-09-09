@@ -368,7 +368,10 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
       // An empty badge means "drop the name" — that is exactly what ^X does,
       // so reuse its outcome instead of building a second delete path.
       if (handle === '') {
-        return ctx.names?.has(state.line.trim()) === true
+        // Cwd-scoped on purpose: the badge only ever shows a handle that
+        // applies here, and deletion is global — `has()` would delete a
+        // record from another directory that the user never saw.
+        return (ctx.names?.handleFor(state.line.trim(), ctx.cwd ?? '') ?? null) !== null
           ? { kind: 'forget', line: state.line.trim(), state: { ...state, naming: null, selected: 0 } }
           : update({ ...state, naming: null });
       }

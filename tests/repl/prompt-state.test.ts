@@ -715,6 +715,14 @@ describe('Prompt state: magic names (Ctrl+N badge)', () => {
     });
   });
 
+  it('Ctrl+S on an empty badge leaves a handle from another directory alone', () => {
+    // The badge is empty because the prefill is cwd-scoped, and deleting is
+    // global — ^S must not drop a handle the user was never shown.
+    const index = names([{ name: 'haiku', line: LONG, cwds: ['/elsewhere'], ts: 1 }]);
+    const outcome = handleKey(typedState(LONG, naming('')), key('s', { ctrl: true }), magicCtx(index));
+    expect(outcome).toEqual({ kind: 'update', state: expect.objectContaining({ naming: null }) });
+  });
+
   it('Ctrl+S with an invalid handle saves nothing and keeps the badge open', () => {
     // No execution hides the failure here, so the badge must stay put.
     const outcome = handleKey(typedState(LONG, naming('ab')), key('s', { ctrl: true }), magicCtx(names()));

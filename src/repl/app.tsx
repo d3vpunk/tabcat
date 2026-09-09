@@ -36,9 +36,10 @@ export interface PromptOptions {
   /**
    * ^X on a surfaced magic name: persist the deletion (tombstone + index
    * removal). Called while the prompt stays open — the candidate list
-   * refreshes in place.
+   * refreshes in place. Returns false when the write was refused (busy
+   * names file), so the toast does not claim a deletion that did not happen.
    */
-  onForget?: ((line: string) => void) | undefined;
+  onForget?: ((line: string) => boolean) | undefined;
   /** ^S: persist a handle without executing. Returns the toast to show. */
   onName?: ((line: string, save: NamingState) => string) | undefined;
   /**
@@ -187,7 +188,9 @@ export function namingBadge(
   const reason = issue === 'taken' ? ' · taken' : issue === 'command' ? ' · = command name' : '';
   return {
     marker: naming.scope === 'global' ? '🌐' : '⚡',
-    hint: `  ${level} · ^S: save · enter: save+run · esc: cancel${reason}`,
+    // `a-z 0-9` is the one part that explains the silent input filter:
+    // anything else the user types is discarded without a sound.
+    hint: `  ${level} · a-z 0-9 · ^S: save · enter: save+run · esc: cancel${reason}`,
   };
 }
 
@@ -198,6 +201,8 @@ const HELP_KEYS = [
   ['↑ / ↓', 'Navigate history or suggestions'],
   ['Ctrl-R', 'Search history'],
   ['Ctrl-N', 'Name this command'],
+  ['Ctrl-G', 'In the naming badge: here only / everywhere'],
+  ['Ctrl-S', 'In the naming badge: save without running'],
   ['Ctrl-X', 'Forget selected suggestion / magic name'],
   ['Esc', 'Close suggestions'],
   ['Ctrl-C', 'Clear current input'],
@@ -651,9 +656,9 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
       // Delete the surfaced magic name, keep the prompt open: persistence
       // happens outside (tombstone + index removal), the bumped version
       // recomputes the prediction without the forgotten handle.
-      onForget?.(outcome.line);
+      const forgotten = onForget?.(outcome.line);
       setNamesVersion((version) => version + 1);
-      setToast(`forgot ⚡${outcome.line}`);
+      setToast(forgotten === false ? 'names file is busy — nothing forgotten' : `forgot ⚡${outcome.line}`);
       return setState(outcome.state);
     }
     if (outcome.kind === 'name') {
@@ -705,6 +710,9 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
   const visibleGhost = ghost.slice(0, Math.max(0, win.ghostRemain));
 
   const namingIssue: HandleIssue | null = naming !== null ? namingIssueFor(naming, line, cwd, names) : null;
+  // Hoisted next to namingIssue: the badge branch renders marker and hint,
+  // and the fallback only exists because that branch is a ternary arm.
+  const badge = naming !== null ? namingBadge(naming, namingIssue) : { marker: '', hint: '' };
   // Discovery badge: the typed line (or the line as it would be if the top
   // suggestion were accepted — computed per dropdown row) already has a handle
   // here. This is the loop: discover via badge → next time type the handle.
@@ -765,17 +773,10 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
         </Box>
       ) : naming !== null ? (
         <Box>
-          {(() => {
-            const badge = namingBadge(naming, namingIssue);
-            return (
-              <>
-                <Text backgroundColor={namingIssue !== null ? 'red' : 'blue'} color="whiteBright" bold>
-                  {` ${badge.marker} ${naming.handle}▏ `}
-                </Text>
-                <Text dimColor>{badge.hint}</Text>
-              </>
-            );
-          })()}
+          <Text backgroundColor={namingIssue !== null ? 'red' : 'blue'} color="whiteBright" bold>
+            {` ${badge.marker} ${naming.handle}▏ `}
+          </Text>
+          <Text dimColor>{badge.hint}</Text>
         </Box>
       ) : searchQuery !== null ? (
         <Box

@@ -67,7 +67,9 @@ export function formatNamesList(names: readonly MagicName[]): string[] {
   if (names.length === 0) return [];
   // The column answers what the flat list used to leave open: why a handle
   // does nothing in the directory you are standing in.
-  const where = (name: MagicName): string => (isGlobal(name) ? 'everywhere' : (name.cwds[0] ?? ''));
+  // Every directory, not just the first: the model allows several per record
+  // (a hand-edited file), and a column showing one of them would lie.
+  const where = (name: MagicName): string => (isGlobal(name) ? 'everywhere' : name.cwds.join(', '));
   const handleWidth = Math.max(...names.map((name) => name.name.length));
   const whereWidth = Math.max(...names.map((name) => where(name).length));
   return names.map(
@@ -188,15 +190,6 @@ export class NameIndex {
       .filter((name) => name.line.startsWith(text) && activeIn(name, cwd))
       .sort((a, b) => a.line.length - b.line.length || cmp(a, b));
     return hits[0]?.name ?? null;
-  }
-
-  /** Handles in use (collision guard). With `cwd`, only handles active there —
-   *  the same handle in an unrelated directory never surfaces, so it is no
-   *  collision. */
-  handles(cwd?: string): string[] {
-    return [...this.byLine.values()]
-      .filter((name) => cwd === undefined || activeIn(name, cwd))
-      .map((name) => name.name);
   }
 
   /**

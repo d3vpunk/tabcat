@@ -81,7 +81,7 @@ Long, hard-to-read commands get a short handle you assign yourself — no AI, no
 
 ```text
 ~/proj ❯ docker compose -f qlico/compose.yaml run php vendor/bin/phpstan analyze src
- ⚡ phpstananalyze▏   a-z 0-9 · enter: save+run · esc: cancel
+ ⚡ phpstananalyze▏   here · ^G: global · a-z 0-9 · ^S: save · enter: save+run · esc: cancel
 ```
 
 - **Create:** type the command, press `Ctrl+N`, type a handle (3–16 chars, `a-z 0-9`), Enter saves it *and* runs the command. Esc cancels without executing. Enter never blocks: an invalid or colliding handle just runs the command without saving.

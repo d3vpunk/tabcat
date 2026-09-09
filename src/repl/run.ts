@@ -165,6 +165,46 @@ function handleSettingsCommand(
   return note([`${first} = ${value.value}${spec.appliesLive ? '' : ' — takes effect at the next start'}`]);
 }
 
+/** The names-file writers, injectable so a busy lock is testable. */
+export interface NamesWriters {
+  append?: (file: string, name: MagicName) => boolean;
+  tombstone?: (file: string, line: string, ts: number) => boolean;
+}
+
+/**
+ * Save a handle: disk FIRST, index only when the write landed. appendName
+ * returns false on a busy lock, and a handle that lives only in memory is
+ * gone after the next start while the session pretends it was saved.
+ */
+export function persistName(
+  index: NameIndex,
+  file: string,
+  magicName: MagicName,
+  writers: NamesWriters = {},
+): boolean {
+  if (!(writers.append ?? appendName)(file, magicName)) return false;
+  index.add(magicName);
+  return true;
+}
+
+/**
+ * Drop a handle: tombstone FIRST, index only when the write landed. An
+ * unnamed line is `true` — there is nothing to persist, so nothing failed;
+ * `false` means the write was refused and the handle is still on disk.
+ */
+export function persistForget(
+  index: NameIndex,
+  file: string,
+  line: string,
+  ts: number,
+  writers: NamesWriters = {},
+): boolean {
+  if (!index.has(line)) return true;
+  if (!(writers.tombstone ?? appendTombstone)(file, line, ts)) return false;
+  index.remove(line);
+  return true;
+}
+
 export interface ReplOptions {
   /** Compact prompt: 1-row dropdown with inline counter, no legend line. */
   minimal?: boolean;
@@ -284,17 +324,15 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
             names: nameIndex,
             // ^X inside the prompt: same tombstone semantics as an emptied
             // naming badge, but without executing anything.
-            onForget: (forgotten: string) => {
-              if (!nameIndex.has(forgotten)) return;
-              nameIndex.remove(forgotten);
-              appendTombstone(namesFile, forgotten, Date.now());
-            },
+            // The tombstone goes to disk first: a busy lock returns false and
+            // the toast says so, instead of a deletion the next start undoes.
+            onForget: (forgotten: string): boolean =>
+              persistForget(nameIndex, namesFile, forgotten, Date.now()),
             // ^S: persist without executing. The toast reports what actually
             // happened — appendName can silently fail on a busy lock.
             onName: (named: string, save: NamingState): string => {
               const magicName = makeName(save.handle, named.trim(), save.scope, cwd, Date.now());
-              if (!appendName(namesFile, magicName)) return 'names file is busy — nothing saved';
-              nameIndex.add(magicName);
+              if (!persistName(nameIndex, namesFile, magicName)) return 'names file is busy — nothing saved';
               return save.scope === 'global'
                 ? `🌐 ${save.handle} applies everywhere`
                 : `⚡ ${save.handle} applies here`;
@@ -347,16 +385,17 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
     // independent of the command's exit code (a failed command keeps its name).
     if (magicEnabled && result.saveName !== undefined) {
       if (result.saveName.handle === '') {
-        // Empty badge on a previously named command = delete (tombstone);
-        // on an unnamed one it is just the escape hatch — nothing to do.
-        if (nameIndex.has(line)) {
-          nameIndex.remove(line);
-          appendTombstone(namesFile, line, Date.now());
+        // Empty badge on a command named HERE = delete (tombstone). On an
+        // unnamed one — or one named only in another directory, which the
+        // badge never showed — it is just the escape hatch: nothing to do.
+        if (nameIndex.nameFor(line, cwd) !== null && !persistForget(nameIndex, namesFile, line, Date.now())) {
+          console.error('tabcat: names file is busy — nothing forgotten.');
         }
       } else {
         const magicName: MagicName = makeName(result.saveName.handle, line, result.saveName.scope, cwd, Date.now());
-        nameIndex.add(magicName);
-        appendName(namesFile, magicName);
+        if (!persistName(nameIndex, namesFile, magicName)) {
+          console.error('tabcat: names file is busy — nothing saved.');
+        }
       }
     }
 

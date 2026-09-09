@@ -110,23 +110,13 @@ describe('names: NameIndex', () => {
   it('newest ts wins per command line', () => {
     const index = new NameIndex([name({ name: 'oldname', ts: 1000 }), name({ name: 'newname', ts: 2000 })]);
     expect(index.handleFor(name().line, CWD)).toBe('newname');
-    expect(index.handles()).toEqual(['newname']);
+    expect(index.all().map((entry) => entry.name)).toEqual(['newname']);
   });
 
   it('add ignores older records for the same line', () => {
     const index = new NameIndex([name({ name: 'newname', ts: 2000 })]);
     index.add(name({ name: 'oldname', ts: 1000 }));
     expect(index.handleFor(name().line, CWD)).toBe('newname');
-  });
-
-  it('handles(cwd) hides handles that only live elsewhere; context-free stays', () => {
-    const index = new NameIndex([
-      name(),
-      name({ line: 'cmd-b', name: 'elsewhere', cwds: [OTHER] }),
-      name({ line: 'cmd-c', name: 'everywhere', cwds: [] }),
-    ]);
-    expect(index.handles(CWD).sort()).toEqual(['everywhere', 'phpstananalyze']);
-    expect(index.handles().sort()).toEqual(['elsewhere', 'everywhere', 'phpstananalyze']);
   });
 
   it('has and remove work by line', () => {
@@ -284,14 +274,10 @@ describe('names: precedence (local beats global)', () => {
   const index = () => new NameIndex([LOCAL, GLOBAL]);
 
   it('resolves to the local command in its directory, to the global one elsewhere', () => {
+    // GLOBAL.ts is the higher one — specificity has to win, or a later global
+    // handle would silently shadow an older local one.
     expect(index().resolve('dep', CWD)).toBe(LOCAL.line);
     expect(index().resolve('dep', OTHER)).toBe(GLOBAL.line);
-  });
-
-  it('ignores the newer timestamp when the local one is more specific', () => {
-    // GLOBAL.ts is higher — specificity has to win, or a later global handle
-    // would silently shadow an older local one.
-    expect(index().resolve('dep', CWD)).toBe(LOCAL.line);
   });
 
   it('offers each handle once, resolved by the most specific record', () => {
@@ -336,11 +322,6 @@ describe('names: collisions apply within one level', () => {
     // exists, and a local handle somewhere is never a global conflict.
     expect(index.blockingHandles('global', CWD)).not.toContain('dep');
   });
-
-  it('handles() keeps listing everything that applies here', () => {
-    expect(index.handles(CWD).sort()).toEqual(['dep', 'haiku']);
-    expect(index.handles(OTHER).sort()).toEqual(['dep', 'haiku']);
-  });
 });
 
 describe('names: a collision is decided by record, not by handle', () => {
@@ -381,6 +362,13 @@ describe('names: formatNamesList', () => {
     expect(lines[1]).toMatch(/^dep\s+\/projects\/a\s+npm ci$/);
     // Same column start for both rows — the point of the padding.
     expect(lines[0]?.indexOf('everywhere')).toBe(lines[1]?.indexOf('/projects/a'));
+  });
+
+  it('names every directory of a record, not just the first', () => {
+    // Nothing in the UI writes two directories, but a hand-edited file can —
+    // and a column showing one of them would be a lie.
+    const lines = formatNamesList([name({ name: 'dep', line: 'npm ci', cwds: ['/projects/a', '/projects/b'] })]);
+    expect(lines[0]).toBe('dep  /projects/a, /projects/b  npm ci');
   });
 
   it('returns no lines for an empty index', () => {

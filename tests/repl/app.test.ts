@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ReplOutput, acceptedLineFor, clampMinimalDisplay, extractPaste, homeEndKey, isMultilinePaste, legendVisible, lineWindow, magicCandidates, magicCommandHints, namingBadge, namingIssueFor, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
-import { NameIndex } from '../../src/engine/names.js';
+import { NameIndex, makeName } from '../../src/engine/names.js';
 import { PromptState, handleKey, initialPromptState } from '../../src/repl/prompt-state.js';
-import { handleReplCommand, isInteractiveTerminal } from '../../src/repl/run.js';
+import { handleReplCommand, isInteractiveTerminal, persistForget, persistName } from '../../src/repl/run.js';
 
 describe('REPL environment', () => {
   it('accepts only input and output with TTY', () => {
@@ -457,10 +457,13 @@ describe('naming badge', () => {
     expect(namingBadge({ handle: 'haiku', scope: 'global' }, null).hint).toContain('^G: here only');
   });
 
-  it('always advertises both commit keys', () => {
+  it('always advertises both commit keys and the character filter', () => {
     const { hint } = namingBadge({ handle: 'haiku', scope: 'here' }, null);
     expect(hint).toContain('^S: save');
     expect(hint).toContain('enter: save+run');
+    // Input outside a-z 0-9 is dropped silently — the hint is the only place
+    // that says so.
+    expect(hint).toContain('a-z 0-9');
   });
 
   it('appends the reason a save would be skipped', () => {
@@ -499,5 +502,39 @@ describe('naming badge', () => {
   it('stays quiet on an empty badge and without an index', () => {
     expect(namingIssueFor({ handle: '', scope: 'here' }, LONG, CWD, new NameIndex())).toBeNull();
     expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, undefined)).toBeNull();
+  });
+});
+
+describe('REPL name persistence', () => {
+  const CWD = '/home/dev/project';
+  const FILE = '/tmp/names.jsonl';
+  const haiku = makeName('haiku', 'claude --model haiku', 'global', CWD, 1);
+
+  it('adopts a handle only after the write landed', () => {
+    const index = new NameIndex();
+    expect(persistName(index, FILE, haiku, { append: () => false })).toBe(false);
+    // A busy lock must leave nothing behind: an in-memory handle would work
+    // for this session and be gone after the next start.
+    expect(index.has(haiku.line)).toBe(false);
+
+    expect(persistName(index, FILE, haiku, { append: () => true })).toBe(true);
+    expect(index.handleFor(haiku.line, CWD)).toBe('haiku');
+  });
+
+  it('keeps a handle when the tombstone could not be written', () => {
+    const index = new NameIndex([haiku]);
+    expect(persistForget(index, FILE, haiku.line, 2, { tombstone: () => false })).toBe(false);
+    expect(index.has(haiku.line)).toBe(true);
+
+    expect(persistForget(index, FILE, haiku.line, 2, { tombstone: () => true })).toBe(true);
+    expect(index.has(haiku.line)).toBe(false);
+  });
+
+  it('an unnamed line is nothing to forget, not a failure', () => {
+    const index = new NameIndex();
+    const tombstone = () => {
+      throw new Error('must not write a tombstone for an unnamed line');
+    };
+    expect(persistForget(index, FILE, 'ls -la', 2, { tombstone })).toBe(true);
   });
 });
