@@ -5,7 +5,7 @@ import { CompletionTelemetry } from '../engine/model.js';
 import { HandleIssue, NameIndex, handleIssue } from '../engine/names.js';
 import { fuzzySearch } from './history-search.js';
 import { nextBoundary } from './text-nav.js';
-import { HandlerContext, KeyEvent, KeyOutcome, PromptState, enterPasteMode, handleKey, initialPromptState } from './prompt-state.js';
+import { HandlerContext, KeyEvent, KeyOutcome, NamingState, PromptState, enterPasteMode, handleKey, initialPromptState } from './prompt-state.js';
 import { SETTINGS, specFor } from '../settings/schema.js';
 import { ReplStats } from './stats.js';
 
@@ -19,7 +19,7 @@ export type PromptResult =
       line: string;
       completion: CompletionTelemetry;
       /** Only set when the naming badge committed: handle = save, '' = delete-if-named. */
-      saveName?: string;
+      saveName?: NamingState;
     }
   | { type: 'exit' };
 
@@ -39,6 +39,8 @@ export interface PromptOptions {
    * refreshes in place.
    */
   onForget?: ((line: string) => void) | undefined;
+  /** ^S: persist a handle without executing. Returns the toast to show. */
+  onName?: ((line: string, save: NamingState) => string) | undefined;
   /**
    * ^X on a history suggestion: remove `line` from the history and rebuild
    * the model. Returns how many entries went — 0 = was not there, negative =
@@ -156,6 +158,41 @@ export function magicCandidates(line: string, cursor: number): readonly RankedCa
     acceptedPrefixLength: cursor,
     replacePrefixLength: cursor,
   }));
+}
+
+/**
+ * Live badge validation: red only for a real conflict ON THE LEVEL being
+ * named on — a handle taken in another directory is no conflict, and a
+ * global one may be shadowed locally. "Too short" stays quiet while typing
+ * and only skips the save.
+ */
+export function namingIssueFor(
+  naming: NamingState,
+  line: string,
+  cwd: string,
+  names: NameIndex | undefined,
+): HandleIssue | null {
+  if (naming.handle === '' || names === undefined) return null;
+  // Renaming a command to the handle it already owns is not a collision.
+  const own = names.handleFor(line.trim(), cwd);
+  return handleIssue(
+    naming.handle,
+    line,
+    names.blockingHandles(naming.scope, cwd).filter((handle) => handle !== own),
+  );
+}
+
+/** Marker and hint line of the naming badge — the badge itself stays dumb. */
+export function namingBadge(
+  naming: NamingState,
+  issue: HandleIssue | null,
+): { marker: string; hint: string } {
+  const level = naming.scope === 'global' ? 'GLOBAL · ^G: nur hier' : 'hier · ^G: global';
+  const reason = issue === 'taken' ? ' · taken' : issue === 'command' ? ' · = command name' : '';
+  return {
+    marker: naming.scope === 'global' ? '🌐' : '⚡',
+    hint: `  ${level} · ^S: save · enter: save+run · esc: cancel${reason}`,
+  };
 }
 
 const HELP_KEYS = [
@@ -423,7 +460,7 @@ interface AppProps extends PromptOptions {
   onDone: (result: PromptResult) => void;
 }
 
-function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, onForgetHistory, minimal = false, dropdownRows: dropdownRowsSetting = DROPDOWN_ROWS, footer = true, onDone }: AppProps) {
+function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, onName, onForgetHistory, minimal = false, dropdownRows: dropdownRowsSetting = DROPDOWN_ROWS, footer = true, onDone }: AppProps) {
   const { exit } = useApp();
   const { internal_eventEmitter } = useStdin();
 
@@ -620,6 +657,14 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
       setToast(`forgot ⚡${outcome.line}`);
       return setState(outcome.state);
     }
+    if (outcome.kind === 'name') {
+      // Saved without executing: the prompt stays open, the bumped version
+      // recomputes the prediction with the new handle in play.
+      const toastText = onName?.(outcome.line, outcome.saveName) ?? 'could not save the handle';
+      setNamesVersion((version) => version + 1);
+      setToast(toastText);
+      return setState(outcome.state);
+    }
     if (outcome.kind === 'forget-history') {
       // Remove the line from the history, keep the prompt open. The counter
       // recomputes prediction and recentUnique — run.ts mutated both sources
@@ -660,13 +705,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
       : '';
   const visibleGhost = ghost.slice(0, Math.max(0, win.ghostRemain));
 
-  // Live badge validation: red only for real conflicts ('taken' / program
-  // name) — "too short" stays quiet while typing and only skips the save.
-  const ownHandle = names ? names.handleFor(line.trim(), cwd) : null;
-  const namingIssue: HandleIssue | null =
-    naming !== null && naming !== '' && names
-      ? handleIssue(naming, line, names.handles(cwd).filter((handle) => handle !== ownHandle))
-      : null;
+  const namingIssue: HandleIssue | null = naming !== null ? namingIssueFor(naming, line, cwd, names) : null;
   // Discovery badge: the typed line (or the line as it would be if the top
   // suggestion were accepted — computed per dropdown row) already has a handle
   // here. This is the loop: discover via badge → next time type the handle.
@@ -728,11 +767,9 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
       ) : naming !== null ? (
         <Box>
           <Text backgroundColor={namingIssue !== null ? 'red' : 'blue'} color="whiteBright" bold>
-            {` ⚡ ${naming}▏ `}
+            {` ${namingBadge(naming, namingIssue).marker} ${naming.handle}▏ `}
           </Text>
-          <Text dimColor>
-            {`  a-z 0-9 · enter: save+run · esc: cancel${namingIssue === 'taken' ? ' · taken' : namingIssue === 'command' ? ' · = command name' : ''}`}
-          </Text>
+          <Text dimColor>{namingBadge(naming, namingIssue).hint}</Text>
         </Box>
       ) : searchQuery !== null ? (
         <Box

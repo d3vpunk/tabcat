@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ReplOutput, acceptedLineFor, clampMinimalDisplay, extractPaste, homeEndKey, isMultilinePaste, legendVisible, lineWindow, magicCandidates, magicCommandHints, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { ReplOutput, acceptedLineFor, clampMinimalDisplay, extractPaste, homeEndKey, isMultilinePaste, legendVisible, lineWindow, magicCandidates, magicCommandHints, namingBadge, namingIssueFor, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { NameIndex } from '../../src/engine/names.js';
 import { PromptState, handleKey, initialPromptState } from '../../src/repl/prompt-state.js';
 import { handleReplCommand, isInteractiveTerminal } from '../../src/repl/run.js';
 
@@ -410,5 +411,48 @@ describe('Long line window (lineWindow)', () => {
   it('ghostRemain is positive when cursor is at end of line and space in window', () => {
     const win = lineWindow('git', 3, 80);
     expect(win.ghostRemain).toBe(77);
+  });
+});
+
+describe('naming badge', () => {
+  const CWD = '/home/dev/project';
+  const LONG = 'docker compose run php vendor/bin/phpstan analyze src';
+
+  it('marks the level it would save on', () => {
+    expect(namingBadge({ handle: 'haiku', scope: 'here' }, null).marker).toBe('⚡');
+    expect(namingBadge({ handle: 'haiku', scope: 'global' }, null).marker).toBe('🌐');
+  });
+
+  it('offers the opposite level in the hint', () => {
+    expect(namingBadge({ handle: 'haiku', scope: 'here' }, null).hint).toContain('^G: global');
+    expect(namingBadge({ handle: 'haiku', scope: 'global' }, null).hint).toContain('^G: nur hier');
+  });
+
+  it('always advertises both commit keys', () => {
+    const { hint } = namingBadge({ handle: 'haiku', scope: 'here' }, null);
+    expect(hint).toContain('^S: save');
+    expect(hint).toContain('enter: save+run');
+  });
+
+  it('appends the reason a save would be skipped', () => {
+    expect(namingBadge({ handle: 'dep', scope: 'here' }, 'taken').hint).toContain('taken');
+    expect(namingBadge({ handle: 'docker', scope: 'here' }, 'command').hint).toContain('= command name');
+  });
+
+  it('reports a collision only on the level being named on', () => {
+    const index = new NameIndex([{ name: 'dep', line: 'other command', cwds: [CWD], ts: 1 }]);
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, index)).toBe('taken');
+    // Going global with a locally taken handle is the whole point.
+    expect(namingIssueFor({ handle: 'dep', scope: 'global' }, LONG, CWD, index)).toBeNull();
+  });
+
+  it('renaming a command to its own handle is no collision', () => {
+    const index = new NameIndex([{ name: 'dep', line: LONG, cwds: [CWD], ts: 1 }]);
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, index)).toBeNull();
+  });
+
+  it('stays quiet on an empty badge and without an index', () => {
+    expect(namingIssueFor({ handle: '', scope: 'here' }, LONG, CWD, new NameIndex())).toBeNull();
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, undefined)).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ import { VERSION } from '../version.js';
 import { ReplOutput, promptOnce, showReplHelp, showReplOutput } from './app.js';
 import { ShellSnapshot, execute, warmShellSnapshot } from './executor.js';
 import { osc7Cwd } from './osc.js';
+import { NamingState } from './prompt-state.js';
 import { realFs } from './real-fs.js';
 import { showMeowAnimation } from './meow.js';
 import { showSettingsEditor } from './settings-ui.js';
@@ -288,6 +289,16 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
               nameIndex.remove(forgotten);
               appendTombstone(namesFile, forgotten, Date.now());
             },
+            // ^S: persist without executing. The toast reports what actually
+            // happened — appendName can silently fail on a busy lock.
+            onName: (named: string, save: NamingState): string => {
+              const magicName = makeName(save.handle, named.trim(), save.scope, cwd, Date.now());
+              if (!appendName(namesFile, magicName)) return 'names file is busy — nothing saved';
+              nameIndex.add(magicName);
+              return save.scope === 'global'
+                ? `🌐 ${save.handle} applies everywhere`
+                : `⚡ ${save.handle} applies here`;
+            },
           }
         : {}),
     });
@@ -335,7 +346,7 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
     // Naming badge outcome: create/delete BEFORE executing — saving is
     // independent of the command's exit code (a failed command keeps its name).
     if (magicEnabled && result.saveName !== undefined) {
-      if (result.saveName === '') {
+      if (result.saveName.handle === '') {
         // Empty badge on a previously named command = delete (tombstone);
         // on an unnamed one it is just the escape hatch — nothing to do.
         if (nameIndex.has(line)) {
@@ -343,7 +354,7 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
           appendTombstone(namesFile, line, Date.now());
         }
       } else {
-        const magicName: MagicName = makeName(result.saveName, line, 'here', cwd, Date.now());
+        const magicName: MagicName = makeName(result.saveName.handle, line, result.saveName.scope, cwd, Date.now());
         nameIndex.add(magicName);
         appendName(namesFile, magicName);
       }
