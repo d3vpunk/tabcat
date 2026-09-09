@@ -480,6 +480,22 @@ describe('naming badge', () => {
     expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, index)).toBeNull();
   });
 
+  it('another command carrying the same handle still collides', () => {
+    // The exception must be identity-based: `dep` names two different
+    // commands here, one locally and one globally.
+    const HAIKU = 'claude --model haiku';
+    const index = new NameIndex([
+      { name: 'dep', line: LONG, cwds: [CWD], ts: 1 },
+      { name: 'dep', line: HAIKU, cwds: [], ts: 2 },
+    ]);
+    // Naming the global command `dep` here would repoint `dep` in this directory.
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, HAIKU, CWD, index)).toBe('taken');
+    // Taking the local command global would shadow the global `dep` everywhere.
+    expect(namingIssueFor({ handle: 'dep', scope: 'global' }, LONG, CWD, index)).toBe('taken');
+    // The exception still holds for the record's own level.
+    expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, index)).toBeNull();
+  });
+
   it('stays quiet on an empty badge and without an index', () => {
     expect(namingIssueFor({ handle: '', scope: 'here' }, LONG, CWD, new NameIndex())).toBeNull();
     expect(namingIssueFor({ handle: 'dep', scope: 'here' }, LONG, CWD, undefined)).toBeNull();

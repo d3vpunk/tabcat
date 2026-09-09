@@ -173,13 +173,9 @@ export function namingIssueFor(
   names: NameIndex | undefined,
 ): HandleIssue | null {
   if (naming.handle === '' || names === undefined) return null;
-  // Renaming a command to the handle it already owns is not a collision.
-  const own = names.handleFor(line.trim(), cwd);
-  return handleIssue(
-    naming.handle,
-    line,
-    names.blockingHandles(naming.scope, cwd).filter((handle) => handle !== own),
-  );
+  // Renaming a command to the handle it already owns is not a collision —
+  // exempted by line, so another command's identical handle still blocks.
+  return handleIssue(naming.handle, line, names.blockingHandles(naming.scope, cwd, line.trim()));
 }
 
 /** Marker and hint line of the naming badge — the badge itself stays dumb. */

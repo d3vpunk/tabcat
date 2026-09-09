@@ -323,11 +323,11 @@ const anchorAfterAccept = (state: PromptState): PromptState =>
     ? { ...state, undoStack: [...state.undoStack, state.line], lastChangeWasAccept: false }
     : state;
 
-/** Handles blocking this level, minus the one already owned by this line
- *  (renaming to itself is not a collision). */
+/** Handles blocking this level. The line being named is exempt by identity —
+ *  re-labelling a command is not a collision with itself, while another
+ *  command's handle keeps blocking even when it has the same name. */
 function blockingFor(state: PromptState, ctx: HandlerContext, scope: NameScope): string[] {
-  const own = ctx.names?.handleFor(state.line.trim(), ctx.cwd ?? '') ?? null;
-  return (ctx.names?.blockingHandles(scope, ctx.cwd ?? '') ?? []).filter((handle) => handle !== own);
+  return ctx.names?.blockingHandles(scope, ctx.cwd ?? '', state.line.trim()) ?? [];
 }
 
 export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerContext): KeyOutcome {

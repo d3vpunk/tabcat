@@ -343,6 +343,33 @@ describe('names: collisions apply within one level', () => {
   });
 });
 
+describe('names: a collision is decided by record, not by handle', () => {
+  // Two different commands carrying the SAME handle on different levels — the
+  // case a handle-string exception cannot tell apart from the record itself.
+  const localDep = name({ name: 'dep', line: 'docker compose exec php composer install', cwds: [CWD] });
+  const globalDep = name({ name: 'dep', line: 'claude --model haiku', cwds: [] });
+  const index = new NameIndex([localDep, globalDep]);
+
+  it('another record keeps blocking even when it carries the same handle', () => {
+    // Naming the global command `dep` HERE would repoint `dep` in this
+    // directory from the local record to the global one.
+    expect(index.blockingHandles('here', CWD, globalDep.line)).toEqual(['dep']);
+    // The mirror case: taking the local command global would shadow the
+    // existing global `dep` in every directory.
+    expect(index.blockingHandles('global', CWD, localDep.line)).toEqual(['dep']);
+  });
+
+  it('exempts only the command being named', () => {
+    expect(index.blockingHandles('here', CWD, localDep.line)).toEqual([]);
+    expect(index.blockingHandles('global', CWD, globalDep.line)).toEqual([]);
+  });
+
+  it('without an exception nothing is exempt', () => {
+    expect(index.blockingHandles('here', CWD)).toEqual(['dep']);
+    expect(index.blockingHandles('global', CWD)).toEqual(['dep']);
+  });
+});
+
 describe('names: formatNamesList', () => {
   it('aligns handle, scope and command', () => {
     const lines = formatNamesList([

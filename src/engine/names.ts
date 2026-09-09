@@ -204,9 +204,15 @@ export class NameIndex {
    * 'here'   → only those defined in this very cwd (a global handle may be
    *            legitimately shadowed — local wins here anyway)
    * 'global' → only the global ones (a local handle somewhere is no conflict)
+   *
+   * `exceptLine` excludes the command being named, so re-labelling a command
+   * is never a collision with itself. It must be the LINE, not the handle:
+   * two different commands may carry the same handle on different levels, and
+   * matching by name would drop the other command's handle from the guard.
    */
-  blockingHandles(scope: NameScope, cwd: string): string[] {
+  blockingHandles(scope: NameScope, cwd: string, exceptLine?: string): string[] {
     return [...this.byLine.values()]
+      .filter((name) => name.line !== exceptLine)
       .filter((name) => (scope === 'global' ? isGlobal(name) : name.cwds.includes(cwd)))
       .map((name) => name.name);
   }

@@ -633,6 +633,30 @@ describe('Prompt state: magic names (Ctrl+N badge)', () => {
     expect(outcome).toEqual({ kind: 'submit', line: LONG, saveName: naming('phpstananalyze') });
   });
 
+  it('a handle another command owns on this level blocks the save', () => {
+    // `dep` names two different commands — locally the long one, globally
+    // `claude --model haiku`. Saving must not silently repoint either.
+    const HAIKU = 'claude --model haiku';
+    const index = names([
+      { name: 'dep', line: LONG, cwds: [CWD], ts: 1 },
+      { name: 'dep', line: HAIKU, cwds: [], ts: 2 },
+    ]);
+    expect(handleKey(typedState(HAIKU, naming('dep')), key('', { return: true }), magicCtx(index))).toEqual({
+      kind: 'submit',
+      line: HAIKU,
+    });
+    expect(handleKey(typedState(LONG, naming('dep', 'global')), key('', { return: true }), magicCtx(index))).toEqual({
+      kind: 'submit',
+      line: LONG,
+    });
+    // Its own level still saves — the exception is about identity, not name.
+    expect(handleKey(typedState(LONG, naming('dep')), key('', { return: true }), magicCtx(index))).toEqual({
+      kind: 'submit',
+      line: LONG,
+      saveName: naming('dep'),
+    });
+  });
+
   it('Ctrl+G toggles the scope of the open badge and keeps the handle', () => {
     let state = typedState(LONG, naming('haiku'));
     state = press(state, key('g', { ctrl: true }), magicCtx(names()));

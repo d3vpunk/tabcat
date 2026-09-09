@@ -214,7 +214,8 @@ export class EngineHost {
     this.refreshNames();
     // Same guard as the REPL naming badge: the handle must be free on THIS
     // level and must not shadow the command's own program name.
-    const handles = this.nameIndex.blockingHandles(scope, cwd);
+    // `line` is exempt: re-labelling a command it already owns is no collision.
+    const handles = this.nameIndex.blockingHandles(scope, cwd, line);
     const accepted = validateHandle(name, line, handles);
     if (accepted === null) {
       return { created: false, reason: handleIssue(name.toLowerCase(), line, handles) ?? 'malformed' };
