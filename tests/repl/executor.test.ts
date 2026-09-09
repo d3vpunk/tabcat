@@ -99,6 +99,31 @@ describe('executor', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(!hasZsh)('zsh snapshot survives a function whose name is also a default alias', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'tabcat-zsh-home-'));
+    // zsh ships `run-help` as a DEFAULT alias, and rc files routinely autoload a
+    // function of the same name — so the snapshot holds both. Loading it must not
+    // abort at that definition: zsh refuses to define a function over an alias,
+    // and everything after that line would be silently lost. The dump is
+    // alphabetical, so `tabcat_fn` sits after `run-help` and proves the point.
+    writeFileSync(join(home, '.zshrc'), 'autoload -Uz run-help\ntabcat_fn(){ return 0 }\n', 'utf8');
+
+    try {
+      const snapshot = await warmShellSnapshot(zshShell, { ...process.env, HOME: home, ZDOTDIR: home });
+      expect(snapshot).not.toBeNull();
+      const dump = readFileSync(snapshot!.file, 'utf8');
+      // Assert the fixture really reproduces the collision — otherwise this test
+      // would pass for the wrong reason.
+      expect(dump).toMatch(/^alias run-help=/m);
+      expect(dump).toMatch(/^run-help \(\)/m);
+
+      expect(execute('tabcat_fn', process.cwd(), zshShell, snapshot!.file).exitCode).toBe(0);
+      snapshot!.cleanup();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('history seed collapsing (seedLine)', () => {
