@@ -1,7 +1,7 @@
 import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { DEFAULT_SCORING, HistoryEntry, frecency } from '../engine/model.js';
-import { MagicName, NameIndex, activeIn, handleIssue, makeName, validateHandle } from '../engine/names.js';
+import { MagicName, NameIndex, NameScope, activeIn, handleIssue, makeName, validateHandle } from '../engine/names.js';
 import { appendName, appendTombstone, namesFileFor, readNames } from '../engine/names-store.js';
 import { FsLike } from '../engine/fs-completer.js';
 import { Prediction, Predictor } from '../engine/predictor.js';
@@ -210,16 +210,16 @@ export class EngineHost {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  namesCreate(name: string, line: string, cwd: string): NamesCreateResult {
+  namesCreate(name: string, line: string, cwd: string, scope: NameScope): NamesCreateResult {
     this.refreshNames();
-    // Same guard as the REPL naming badge: handle must be free in this cwd and
-    // must not shadow the command's own program name.
-    const handles = this.nameIndex.handles(cwd);
+    // Same guard as the REPL naming badge: the handle must be free on THIS
+    // level and must not shadow the command's own program name.
+    const handles = this.nameIndex.blockingHandles(scope, cwd);
     const accepted = validateHandle(name, line, handles);
     if (accepted === null) {
       return { created: false, reason: handleIssue(name.toLowerCase(), line, handles) ?? 'malformed' };
     }
-    const magicName: MagicName = makeName(accepted, line, 'here', cwd, this.now());
+    const magicName: MagicName = makeName(accepted, line, scope, cwd, this.now());
     if (!appendName(this.namesFile, magicName)) {
       // Nothing on disk means no other shell and not the REPL would ever see
       // this handle — do not pretend it exists.

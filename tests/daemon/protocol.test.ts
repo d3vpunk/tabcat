@@ -121,6 +121,30 @@ describe('protocol: request parsing', () => {
     expect(create.ok).toBe(true);
   });
 
+  it('parses create-global without changing the field count', () => {
+    const line = ['names', 'r1', String(PROTOCOL_VERSION), 'create-global', '/p', 'haiku', 'claude --model haiku'].join('\t');
+    const parsed = parseRequest(line);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok && parsed.request).toMatchObject({ op: 'names', sub: 'create-global', name: 'haiku' });
+  });
+
+  it('still validates the handle on create-global', () => {
+    const line = ['names', 'r1', String(PROTOCOL_VERSION), 'create-global', '/p', 'AB', 'x'].join('\t');
+    expect(parseRequest(line).ok).toBe(false);
+  });
+
+  it('keeps names at 7 fields — the Swift GUI sends exactly that', () => {
+    const short = ['names', 'r1', String(PROTOCOL_VERSION), 'list', '/p', '', ''].join('\t');
+    expect(parseRequest(short).ok).toBe(true);
+    const eight = [...short.split('\t'), 'extra'].join('\t');
+    expect(parseRequest(eight).ok).toBe(false);
+  });
+
+  it('rejects an unknown sub as before', () => {
+    const line = ['names', 'r1', String(PROTOCOL_VERSION), 'create-globl', '/p', 'haiku', 'x'].join('\t');
+    expect(parseRequest(line).ok).toBe(false);
+  });
+
   it.each([
     ['unknown op', request('nope', 'a1', '1'), 'bad_op'],
     ['empty id', request('ping', '', '1'), 'bad_id'],

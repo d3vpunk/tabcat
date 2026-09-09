@@ -247,7 +247,7 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
   it('expands a magic name on Enter', async () => {
     await startRealDaemon();
     // The handle is created through the daemon API; the pty only types 'dep'.
-    expect(daemon?.host.namesCreate('dep', 'touch expanded.marker', dir)).toEqual({ created: true });
+    expect(daemon?.host.namesCreate('dep', 'touch expanded.marker', dir, 'here')).toEqual({ created: true });
     await runPty(`
       pty_start || exit 1
       type_keys 'dep'
@@ -260,7 +260,7 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
 
   it('shows the handle badge for a named command', async () => {
     await startRealDaemon();
-    expect(daemon?.host.namesCreate('dep', 'echo badge-me', dir)).toEqual({ created: true });
+    expect(daemon?.host.namesCreate('dep', 'echo badge-me', dir, 'here')).toEqual({ created: true });
     await runPty(`
       pty_start || exit 1
       type_keys 'echo badge-me'
@@ -275,7 +275,7 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
     // whole command was on the line.
     writeHistory(entry('echo badge-early', 1_700_000_000_000), entry('echo badge-early', 1_700_000_000_001));
     await startRealDaemon();
-    expect(daemon?.host.namesCreate('bad', 'echo badge-early', dir)).toEqual({ created: true });
+    expect(daemon?.host.namesCreate('bad', 'echo badge-early', dir, 'here')).toEqual({ created: true });
     await runPty(`
       pty_start || exit 1
       type_keys 'echo ba'
@@ -358,7 +358,7 @@ describe.skipIf(!zsh)('plugin in a pseudo terminal', { timeout: 60_000 }, () => 
     // \`\${BUFFER##[[:space:]]##}\` strips nothing without extended_glob, so a
     // handle typed with a leading or trailing space never resolved.
     await startRealDaemon();
-    expect(daemon?.host.namesCreate('spc', 'touch spaced.marker', dir)).toEqual({ created: true });
+    expect(daemon?.host.namesCreate('spc', 'touch spaced.marker', dir, 'here')).toEqual({ created: true });
     await runPty(`
       pty_start || exit 1
       type_keys '  spc '
