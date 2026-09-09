@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   GLOBAL_SPECIFICITY, MAGIC_SCORE, MagicName, NameIndex, activeIn, cwdsFor, firstWord,
-  handleIssue, isGlobal, makeName, scopeOf, specificityOf, validateHandle,
+  formatNamesList, handleIssue, isGlobal, makeName, scopeOf, specificityOf, validateHandle,
 } from '../../src/engine/names.js';
 import { Predictor } from '../../src/engine/predictor.js';
 
@@ -340,5 +340,23 @@ describe('names: collisions apply within one level', () => {
   it('handles() keeps listing everything that applies here', () => {
     expect(index.handles(CWD).sort()).toEqual(['dep', 'haiku']);
     expect(index.handles(OTHER).sort()).toEqual(['dep', 'haiku']);
+  });
+});
+
+describe('names: formatNamesList', () => {
+  it('aligns handle, scope and command', () => {
+    const lines = formatNamesList([
+      name({ name: 'haiku', line: 'claude --model haiku', cwds: [] }),
+      name({ name: 'dep', line: 'npm ci', cwds: ['/projects/a'] }),
+    ]);
+
+    expect(lines[0]).toMatch(/^haiku\s+everywhere\s+claude --model haiku$/);
+    expect(lines[1]).toMatch(/^dep\s+\/projects\/a\s+npm ci$/);
+    // Same column start for both rows — the point of the padding.
+    expect(lines[0]?.indexOf('everywhere')).toBe(lines[1]?.indexOf('/projects/a'));
+  });
+
+  it('returns no lines for an empty index', () => {
+    expect(formatNamesList([])).toEqual([]);
   });
 });

@@ -59,6 +59,23 @@ export const makeName = (
 ): MagicName => ({ name: handle, line, cwds: cwdsFor(scope, cwd), ts });
 
 /**
+ * `tabcat names` rows, aligned. Lives here because the scope column needs
+ * `cwds`, which no other module may read — and being pure makes it testable
+ * without a CLI harness.
+ */
+export function formatNamesList(names: readonly MagicName[]): string[] {
+  if (names.length === 0) return [];
+  // The column answers what the flat list used to leave open: why a handle
+  // does nothing in the directory you are standing in.
+  const where = (name: MagicName): string => (isGlobal(name) ? 'everywhere' : (name.cwds[0] ?? ''));
+  const handleWidth = Math.max(...names.map((name) => name.name.length));
+  const whereWidth = Math.max(...names.map((name) => where(name).length));
+  return names.map(
+    (name) => `${name.name.padEnd(handleWidth)}  ${where(name).padEnd(whereWidth)}  ${name.line}`,
+  );
+}
+
+/**
  * How specifically does this handle apply in `cwd`? Smaller = more specific,
  * `null` = does not apply here. The single place in the project that
  * interprets `cwds`.
