@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { HistoryEntry } from '../engine/model.js';
 import { MagicName, NameIndex } from '../engine/names.js';
-import { appendName, namesFileFor, readNames } from '../engine/names-store.js';
+import { appendName, appendTombstone, namesFileFor, readNames } from '../engine/names-store.js';
 import { Predictor } from '../engine/predictor.js';
 import { detectShell } from '../engine/shell.js';
 import { appendHistory, compactHistory, defaultHistoryFile, forgetHistory } from '../engine/store.js';
@@ -286,7 +286,7 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
             onForget: (forgotten: string) => {
               if (!nameIndex.has(forgotten)) return;
               nameIndex.remove(forgotten);
-              appendName(namesFile, { name: '', line: forgotten, cwds: [], ts: Date.now() });
+              appendTombstone(namesFile, forgotten, Date.now());
             },
           }
         : {}),
@@ -340,7 +340,7 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
         // on an unnamed one it is just the escape hatch — nothing to do.
         if (nameIndex.has(line)) {
           nameIndex.remove(line);
-          appendName(namesFile, { name: '', line, cwds: [], ts: Date.now() });
+          appendTombstone(namesFile, line, Date.now());
         }
       } else {
         const magicName: MagicName = { name: result.saveName, line, cwds: [cwd], ts: Date.now() };

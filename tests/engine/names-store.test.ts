@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MagicName } from '../../src/engine/names.js';
-import { appendName, isMagicName, namesFileFor, readNames } from '../../src/engine/names-store.js';
+import { MagicName, makeName, scopeOf } from '../../src/engine/names.js';
+import { appendName, appendTombstone, isMagicName, namesFileFor, readNames } from '../../src/engine/names-store.js';
 
 const name = (overrides: Partial<MagicName> = {}): MagicName => ({
   name: 'deploy',
@@ -95,5 +95,26 @@ describe('names-store', () => {
     expect(isMagicName({ ...name(), cwds: [1] })).toBe(false);
     expect(isMagicName({ ...name(), ts: Number.NaN })).toBe(false);
     expect(isMagicName(null)).toBe(false);
+  });
+});
+
+describe('names-store: appendTombstone', () => {
+  it('drops the handle of a line and survives a round trip', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tc-tomb-'));
+    const file = join(dir, 'names.jsonl');
+    appendName(file, makeName('haiku', 'claude --model haiku', 'global', '/p', 1));
+    expect(readNames(file).map((n) => n.name)).toEqual(['haiku']);
+
+    expect(appendTombstone(file, 'claude --model haiku', 2)).toBe(true);
+    expect(readNames(file)).toEqual([]);
+  });
+
+  it('keeps a global record readable — cwds: [] is a scope, not a marker', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tc-tomb-'));
+    const file = join(dir, 'names.jsonl');
+    appendName(file, makeName('haiku', 'claude --model haiku', 'global', '/p', 1));
+    const [read] = readNames(file);
+    expect(read?.cwds).toEqual([]);
+    expect(scopeOf(read!)).toBe('global');
   });
 });

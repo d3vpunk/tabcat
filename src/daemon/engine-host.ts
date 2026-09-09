@@ -2,7 +2,7 @@ import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from '
 import { StringDecoder } from 'node:string_decoder';
 import { DEFAULT_SCORING, HistoryEntry, frecency } from '../engine/model.js';
 import { MagicName, NameIndex, handleIssue, validateHandle } from '../engine/names.js';
-import { appendName, namesFileFor, readNames } from '../engine/names-store.js';
+import { appendName, appendTombstone, namesFileFor, readNames } from '../engine/names-store.js';
 import { FsLike } from '../engine/fs-completer.js';
 import { Prediction, Predictor } from '../engine/predictor.js';
 import { fuzzySearch } from '../repl/history-search.js';
@@ -236,7 +236,7 @@ export class EngineHost {
   namesDelete(line: string): boolean {
     this.refreshNames();
     if (!this.nameIndex.has(line)) return false;
-    if (!appendName(this.namesFile, { name: '', line, cwds: [], ts: this.now() })) return false;
+    if (!appendTombstone(this.namesFile, line, this.now())) return false;
     this.nameIndex.remove(line);
     this.namesSignature = '';
     return true;
