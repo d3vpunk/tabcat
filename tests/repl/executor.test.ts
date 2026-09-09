@@ -100,24 +100,41 @@ describe('executor', () => {
     }
   });
 
-  it.skipIf(!hasZsh)('zsh snapshot survives a function whose name is also a default alias', async () => {
+  it.skipIf(!hasZsh)('zsh snapshot survives a function whose name is also an alias', async () => {
     const home = mkdtempSync(join(tmpdir(), 'tabcat-zsh-home-'));
-    // zsh ships `run-help` as a DEFAULT alias, and rc files routinely autoload a
-    // function of the same name — so the snapshot holds both. Loading it must not
-    // abort at that definition: zsh refuses to define a function over an alias,
-    // and everything after that line would be silently lost. The dump is
-    // alphabetical, so `tabcat_fn` sits after `run-help` and proves the point.
-    writeFileSync(join(home, '.zshrc'), 'autoload -Uz run-help\ntabcat_fn(){ return 0 }\n', 'utf8');
+    // zsh refuses to define a function whose name is currently an alias, and
+    // both land in the snapshot: `run-help` is a built-in alias that rc files
+    // also autoload as a function. Loading must not abort there — everything
+    // after that line would be silently lost.
+    //
+    // The fixture creates the collision itself instead of relying on zsh's
+    // defaults: a system rc may well `unalias run-help` (Debian's does), and
+    // then the fixture would prove nothing.
+    //
+    // The assertion cannot depend on where in the file the collision lands —
+    // `${(k)functions}` yields hash order, not sorted order. So it checks the
+    // colliding function itself: if the definition could not be parsed, the
+    // function does not exist, whatever else the snapshot managed to load.
+    writeFileSync(
+      join(home, '.zshrc'),
+      'tabcat_collide(){ return 0 }\nalias tabcat_collide=true\ntabcat_fn(){ return 0 }\n',
+      'utf8',
+    );
 
     try {
       const snapshot = await warmShellSnapshot(zshShell, { ...process.env, HOME: home, ZDOTDIR: home });
       expect(snapshot).not.toBeNull();
       const dump = readFileSync(snapshot!.file, 'utf8');
-      // Assert the fixture really reproduces the collision — otherwise this test
-      // would pass for the wrong reason.
-      expect(dump).toMatch(/^alias run-help=/m);
-      expect(dump).toMatch(/^run-help \(\)/m);
+      // The fixture must really reproduce the collision, or this test would
+      // pass for the wrong reason.
+      expect(dump).toMatch(/^alias tabcat_collide=/m);
+      expect(dump).toMatch(/^tabcat_collide \(\)/m);
 
+      // `functions <name>` exits non-zero when the function is undefined, and
+      // the name is an argument here, so the alias is not expanded into it.
+      expect(execute('functions tabcat_collide >/dev/null', process.cwd(), zshShell, snapshot!.file).exitCode).toBe(0);
+      // The alias survives the fix too — it is re-declared after the functions.
+      expect(execute('alias tabcat_collide >/dev/null', process.cwd(), zshShell, snapshot!.file).exitCode).toBe(0);
       expect(execute('tabcat_fn', process.cwd(), zshShell, snapshot!.file).exitCode).toBe(0);
       snapshot!.cleanup();
     } finally {
