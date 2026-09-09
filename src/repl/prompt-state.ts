@@ -145,6 +145,14 @@ export type KeyOutcome =
    */
   | { kind: 'forget'; line: string; state: PromptState }
   /**
+   * ^S in the naming badge: persist the handle on its scope WITHOUT executing
+   * the command — the mirror image of 'forget'. Needed because switching an
+   * existing handle to global would otherwise have to run the command.
+   * Persistence happens outside; `state` continues the prompt with the badge
+   * closed.
+   */
+  | { kind: 'name'; line: string; saveName: NamingState; state: PromptState }
+  /**
    * ^X on a history suggestion (selected dropdown row or Ctrl-R hit): remove
    * `line` from the history — every occurrence, or it resurfaces at once.
    * Persistence and the model rebuild happen outside, like 'forget'.
@@ -355,6 +363,21 @@ export function handleKey(state: PromptState, event: KeyEvent, ctx: HandlerConte
       return valid !== null
         ? { kind: 'submit', line: state.line, saveName: { handle: valid, scope } }
         : { kind: 'submit', line: state.line };
+    }
+    if (key.ctrl && input === 's') {
+      // An empty badge means "drop the name" — that is exactly what ^X does,
+      // so reuse its outcome instead of building a second delete path.
+      if (handle === '') {
+        return ctx.names?.has(state.line.trim()) === true
+          ? { kind: 'forget', line: state.line.trim(), state: { ...state, naming: null, selected: 0 } }
+          : update({ ...state, naming: null });
+      }
+      const valid = validateHandle(handle, state.line, blockingFor(state, ctx, scope));
+      // Nothing executes here, so an invalid handle must not vanish silently:
+      // keep the badge open with its red hint.
+      return valid === null
+        ? update(state)
+        : { kind: 'name', line: state.line, saveName: { handle: valid, scope }, state: { ...state, naming: null } };
     }
     if (key.ctrl && input === 'u') return update({ ...state, naming: { handle: '', scope } });
     if (key.backspace || key.delete) {

@@ -671,6 +671,32 @@ describe('Prompt state: magic names (Ctrl+N badge)', () => {
     expect(outcome).toEqual({ kind: 'submit', line: LONG });
   });
 
+  it('Ctrl+S saves without executing and closes the badge', () => {
+    const outcome = handleKey(typedState(LONG, naming('haiku', 'global')), key('s', { ctrl: true }), magicCtx(names()));
+    expect(outcome).toEqual({
+      kind: 'name',
+      line: LONG,
+      saveName: naming('haiku', 'global'),
+      state: expect.objectContaining({ naming: null, line: LONG }),
+    });
+  });
+
+  it('Ctrl+S on an empty badge is a forget, not a second delete path', () => {
+    const index = names([{ name: 'haiku', line: LONG, cwds: [], ts: 1 }]);
+    const outcome = handleKey(typedState(LONG, naming('')), key('s', { ctrl: true }), magicCtx(index));
+    expect(outcome).toEqual({
+      kind: 'forget',
+      line: LONG,
+      state: expect.objectContaining({ naming: null }),
+    });
+  });
+
+  it('Ctrl+S with an invalid handle saves nothing and keeps the badge open', () => {
+    // No execution hides the failure here, so the badge must stay put.
+    const outcome = handleKey(typedState(LONG, naming('ab')), key('s', { ctrl: true }), magicCtx(names()));
+    expect(outcome).toEqual({ kind: 'update', state: expect.objectContaining({ naming: naming('ab') }) });
+  });
+
   it('exact handle + Enter submits the resolved command', () => {
     const index = names([{ name: 'phpstananalyze', line: LONG, cwds: [CWD], ts: 1 }]);
     const outcome = handleKey(typedState('phpstananalyze'), key('', { return: true }), magicCtx(index));
