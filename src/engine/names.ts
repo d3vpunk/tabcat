@@ -72,6 +72,16 @@ export function specificityOf(name: MagicName, cwd: string): number | null {
 /** Replaces the hand-built copies in run.ts and engine-host.ts. */
 export const activeIn = (name: MagicName, cwd: string): boolean => specificityOf(name, cwd) !== null;
 
+/**
+ * More specific first, then newest — the comparator resolve, match and
+ * handleForPrefix share. Only for lists already filtered by activeIn; the
+ * `?? 0` is a guard against misuse, not an expected case.
+ */
+const bySpecificity =
+  (cwd: string) =>
+  (a: MagicName, b: MagicName): number =>
+    (specificityOf(a, cwd) ?? 0) - (specificityOf(b, cwd) ?? 0) || b.ts - a.ts;
+
 /** First `word` chunk of the lexed line, or ''. */
 export function firstWord(line: string): string {
   return lex(line).find((chunk) => chunk.kind === 'word')?.text ?? '';
@@ -136,10 +146,15 @@ export class NameIndex {
     return this.byLine.has(line);
   }
 
-  /** Handle for an EXACT line, if one exists and is valid in `cwd` — powers the discovery badge. */
-  handleFor(line: string, cwd: string): string | null {
+  /** The record for an EXACT line, if one exists and applies in `cwd`. */
+  nameFor(line: string, cwd: string): MagicName | null {
     const name = this.byLine.get(line);
-    return name !== undefined && activeIn(name, cwd) ? name.name : null;
+    return name !== undefined && activeIn(name, cwd) ? name : null;
+  }
+
+  /** Handle for an EXACT line — powers the discovery badge. */
+  handleFor(line: string, cwd: string): string | null {
+    return this.nameFor(line, cwd)?.name ?? null;
   }
 
   /**
@@ -151,9 +166,10 @@ export class NameIndex {
   handleForPrefix(typed: string, cwd: string, minLength = 2): string | null {
     const text = typed.trimStart();
     if (text.trim().length < minLength) return null;
+    const cmp = bySpecificity(cwd);
     const hits = [...this.byLine.values()]
       .filter((name) => name.line.startsWith(text) && activeIn(name, cwd))
-      .sort((a, b) => a.line.length - b.line.length || b.ts - a.ts);
+      .sort((a, b) => a.line.length - b.line.length || cmp(a, b));
     return hits[0]?.name ?? null;
   }
 
@@ -175,7 +191,7 @@ export class NameIndex {
     const wanted = handle.toLowerCase();
     const hits = [...this.byLine.values()]
       .filter((name) => name.name === wanted && activeIn(name, cwd))
-      .sort((a, b) => b.ts - a.ts);
+      .sort(bySpecificity(cwd));
     return hits[0]?.line ?? null;
   }
 
@@ -186,9 +202,15 @@ export class NameIndex {
    */
   match(prefix: string, cwd: string): RankedCandidate[] {
     const wanted = prefix.toLowerCase();
+    const cmp = bySpecificity(cwd);
+    const seen = new Set<string>();
     return [...this.byLine.values()]
       .filter((name) => name.name.startsWith(wanted) && activeIn(name, cwd))
-      .sort((a, b) => a.name.length - b.name.length || b.ts - a.ts)
+      .sort((a, b) => a.name.length - b.name.length || cmp(a, b))
+      // One row per handle: a local and a global `dep` would otherwise appear
+      // twice with different resolutions. Sorted first, so this keeps the
+      // most specific record.
+      .filter((name) => (seen.has(name.name) ? false : (seen.add(name.name), true)))
       .map((name, index) => ({
         display: name.line,
         // insert gates the accept machinery ('' = dead key/cycle) — it must

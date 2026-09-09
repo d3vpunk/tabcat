@@ -277,3 +277,43 @@ describe('NameIndex: prefix hint for the badge', () => {
     expect(index.handleForPrefix('  docker com', '/w')).toBe('dep');
   });
 });
+
+describe('names: precedence (local beats global)', () => {
+  const LOCAL = name({ name: 'dep', line: 'docker compose exec php composer install', cwds: [CWD], ts: 100 });
+  const GLOBAL = name({ name: 'dep', line: 'npm ci --prefer-offline', cwds: [], ts: 200 });
+  const index = () => new NameIndex([LOCAL, GLOBAL]);
+
+  it('resolves to the local command in its directory, to the global one elsewhere', () => {
+    expect(index().resolve('dep', CWD)).toBe(LOCAL.line);
+    expect(index().resolve('dep', OTHER)).toBe(GLOBAL.line);
+  });
+
+  it('ignores the newer timestamp when the local one is more specific', () => {
+    // GLOBAL.ts is higher — specificity has to win, or a later global handle
+    // would silently shadow an older local one.
+    expect(index().resolve('dep', CWD)).toBe(LOCAL.line);
+  });
+
+  it('offers each handle once, resolved by the most specific record', () => {
+    const here = index().match('de', CWD);
+    expect(here).toHaveLength(1);
+    expect(here[0]?.display).toBe(LOCAL.line);
+    expect(here[0]?.magicName).toBe('dep');
+
+    const elsewhere = index().match('de', OTHER);
+    expect(elsewhere).toHaveLength(1);
+    expect(elsewhere[0]?.display).toBe(GLOBAL.line);
+  });
+
+  it('still ranks a shorter handle before a longer one', () => {
+    const withOther = new NameIndex([LOCAL, GLOBAL, name({ name: 'deploy', line: 'make deploy', cwds: [] })]);
+    expect(withOther.match('de', CWD).map((c) => c.magicName)).toEqual(['dep', 'deploy']);
+  });
+
+  it('nameFor returns the record, handleFor stays its name', () => {
+    expect(index().nameFor(LOCAL.line, CWD)).toEqual(LOCAL);
+    expect(index().nameFor(LOCAL.line, OTHER)).toBeNull();
+    expect(index().handleFor(GLOBAL.line, OTHER)).toBe('dep');
+    expect(scopeOf(index().nameFor(GLOBAL.line, OTHER)!)).toBe('global');
+  });
+});
