@@ -31,6 +31,47 @@ export const MAGIC_SCORE = 1_000_000;
  */
 export const HANDLE_PATTERN = /^[a-z][a-z0-9]{2,15}$/;
 
+export type NameScope = 'here' | 'global';
+
+/**
+ * Rank distance between the exact step and global. Finite on purpose: the
+ * comparator subtracts two ranks, and Infinity - Infinity is NaN. The gap
+ * leaves room for intermediate steps (repo subtree — PLAN-cwd-cold-start P2).
+ */
+export const GLOBAL_SPECIFICITY = 1_000;
+
+export const isGlobal = (name: MagicName): boolean => name.cwds.length === 0;
+
+export const scopeOf = (name: MagicName): NameScope => (isGlobal(name) ? 'global' : 'here');
+
+export const cwdsFor = (scope: NameScope, cwd: string): string[] => (scope === 'global' ? [] : [cwd]);
+
+/**
+ * The only factory for a MagicName. Callers pass a scope, never a cwds array —
+ * that keeps `cwds` an implementation detail of this module.
+ */
+export const makeName = (
+  handle: string,
+  line: string,
+  scope: NameScope,
+  cwd: string,
+  ts: number,
+): MagicName => ({ name: handle, line, cwds: cwdsFor(scope, cwd), ts });
+
+/**
+ * How specifically does this handle apply in `cwd`? Smaller = more specific,
+ * `null` = does not apply here. The single place in the project that
+ * interprets `cwds`.
+ */
+export function specificityOf(name: MagicName, cwd: string): number | null {
+  if (name.cwds.includes(cwd)) return 0;
+  if (isGlobal(name)) return GLOBAL_SPECIFICITY;
+  return null;
+}
+
+/** Replaces the hand-built copies in run.ts and engine-host.ts. */
+export const activeIn = (name: MagicName, cwd: string): boolean => specificityOf(name, cwd) !== null;
+
 /** First `word` chunk of the lexed line, or ''. */
 export function firstWord(line: string): string {
   return lex(line).find((chunk) => chunk.kind === 'word')?.text ?? '';
@@ -58,9 +99,6 @@ export function validateHandle(proposed: string, command: string, existing: read
   if (!HANDLE_PATTERN.test(name)) return null;
   return handleIssue(name, command, existing) === null ? name : null;
 }
-
-const cwdMatches = (name: MagicName, cwd: string): boolean =>
-  name.cwds.length === 0 || name.cwds.includes(cwd);
 
 /**
  * In-memory handle index, keyed by command line — latest `ts` wins.
@@ -101,7 +139,7 @@ export class NameIndex {
   /** Handle for an EXACT line, if one exists and is valid in `cwd` — powers the discovery badge. */
   handleFor(line: string, cwd: string): string | null {
     const name = this.byLine.get(line);
-    return name !== undefined && cwdMatches(name, cwd) ? name.name : null;
+    return name !== undefined && activeIn(name, cwd) ? name.name : null;
   }
 
   /**
@@ -114,7 +152,7 @@ export class NameIndex {
     const text = typed.trimStart();
     if (text.trim().length < minLength) return null;
     const hits = [...this.byLine.values()]
-      .filter((name) => name.line.startsWith(text) && cwdMatches(name, cwd))
+      .filter((name) => name.line.startsWith(text) && activeIn(name, cwd))
       .sort((a, b) => a.line.length - b.line.length || b.ts - a.ts);
     return hits[0]?.name ?? null;
   }
@@ -124,7 +162,7 @@ export class NameIndex {
    *  collision. */
   handles(cwd?: string): string[] {
     return [...this.byLine.values()]
-      .filter((name) => cwd === undefined || cwdMatches(name, cwd))
+      .filter((name) => cwd === undefined || activeIn(name, cwd))
       .map((name) => name.name);
   }
 
@@ -136,7 +174,7 @@ export class NameIndex {
   resolve(handle: string, cwd: string): string | null {
     const wanted = handle.toLowerCase();
     const hits = [...this.byLine.values()]
-      .filter((name) => name.name === wanted && cwdMatches(name, cwd))
+      .filter((name) => name.name === wanted && activeIn(name, cwd))
       .sort((a, b) => b.ts - a.ts);
     return hits[0]?.line ?? null;
   }
@@ -149,7 +187,7 @@ export class NameIndex {
   match(prefix: string, cwd: string): RankedCandidate[] {
     const wanted = prefix.toLowerCase();
     return [...this.byLine.values()]
-      .filter((name) => name.name.startsWith(wanted) && cwdMatches(name, cwd))
+      .filter((name) => name.name.startsWith(wanted) && activeIn(name, cwd))
       .sort((a, b) => a.name.length - b.name.length || b.ts - a.ts)
       .map((name, index) => ({
         display: name.line,

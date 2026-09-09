@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { MAGIC_SCORE, MagicName, NameIndex, firstWord, handleIssue, validateHandle } from '../../src/engine/names.js';
+import {
+  GLOBAL_SPECIFICITY, MAGIC_SCORE, MagicName, NameIndex, activeIn, cwdsFor, firstWord,
+  handleIssue, isGlobal, makeName, scopeOf, specificityOf, validateHandle,
+} from '../../src/engine/names.js';
 import { Predictor } from '../../src/engine/predictor.js';
 
 const CWD = '/home/dev/project';
@@ -18,6 +21,50 @@ describe('names: firstWord', () => {
     expect(firstWord('docker compose run')).toBe('docker');
     expect(firstWord('  git status')).toBe('git');
     expect(firstWord('')).toBe('');
+  });
+});
+
+describe('names: scope derivation', () => {
+  it('derives the scope from cwds', () => {
+    expect(scopeOf(name({ cwds: [CWD] }))).toBe('here');
+    expect(scopeOf(name({ cwds: [] }))).toBe('global');
+    expect(isGlobal(name({ cwds: [] }))).toBe(true);
+    expect(isGlobal(name({ cwds: [CWD] }))).toBe(false);
+  });
+
+  it('cwdsFor is the inverse of scopeOf', () => {
+    expect(cwdsFor('here', CWD)).toEqual([CWD]);
+    expect(cwdsFor('global', CWD)).toEqual([]);
+    expect(scopeOf(name({ cwds: cwdsFor('global', CWD) }))).toBe('global');
+  });
+
+  it('makeName is the only factory a caller needs', () => {
+    expect(makeName('haiku', 'claude --model haiku', 'global', CWD, 7)).toEqual({
+      name: 'haiku',
+      line: 'claude --model haiku',
+      cwds: [],
+      ts: 7,
+    });
+    expect(makeName('dep', 'npm ci', 'here', CWD, 7).cwds).toEqual([CWD]);
+  });
+
+  it('ranks specificity: exact cwd beats global, foreign dirs do not apply', () => {
+    expect(specificityOf(name({ cwds: [CWD] }), CWD)).toBe(0);
+    expect(specificityOf(name({ cwds: [] }), CWD)).toBe(GLOBAL_SPECIFICITY);
+    expect(specificityOf(name({ cwds: [OTHER] }), CWD)).toBeNull();
+  });
+
+  it('activeIn is specificityOf without the rank', () => {
+    expect(activeIn(name({ cwds: [CWD] }), CWD)).toBe(true);
+    expect(activeIn(name({ cwds: [] }), CWD)).toBe(true);
+    expect(activeIn(name({ cwds: [OTHER] }), CWD)).toBe(false);
+  });
+
+  it('a global rank leaves room for intermediate steps (repo subtree, P2)', () => {
+    // Regression guard for the comparator in Task 2: a finite rank keeps
+    // subtraction defined (Infinity - Infinity is NaN) and leaves gaps.
+    expect(GLOBAL_SPECIFICITY).toBeGreaterThan(1);
+    expect(Number.isFinite(GLOBAL_SPECIFICITY)).toBe(true);
   });
 });
 
