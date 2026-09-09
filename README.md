@@ -165,7 +165,7 @@ prefix keep working:
 | `Shift+Tab` | Undo the last accept |
 | `Enter` | Expand an exact magic-name handle, then run it |
 | `^Xl` | **L**abel: name the current command (magic name) |
-| `^XL` | **G**lobal label: name the current command for every directory |
+| `^XL` | **L**abel for every directory: name the current command |
 | `^Xf` | **F**orget the name of the current command |
 | `^Xq` | **Q**uery: fuzzy history search |
 | `^Xv` | Candidate menu — **v**iew all candidates (`compadd` + `menu-select`) |

@@ -903,7 +903,7 @@ describe('naming badge', () => {
 
   it('offers the opposite level in the hint', () => {
     expect(namingBadge({ handle: 'haiku', scope: 'here' }, null).hint).toContain('^G: global');
-    expect(namingBadge({ handle: 'haiku', scope: 'global' }, null).hint).toContain('^G: nur hier');
+    expect(namingBadge({ handle: 'haiku', scope: 'global' }, null).hint).toContain('^G: here only');
   });
 
   it('always advertises both commit keys', () => {
@@ -975,7 +975,7 @@ export function namingBadge(
   naming: NamingState,
   issue: HandleIssue | null,
 ): { marker: string; hint: string } {
-  const level = naming.scope === 'global' ? 'GLOBAL · ^G: nur hier' : 'hier · ^G: global';
+  const level = naming.scope === 'global' ? 'GLOBAL · ^G: here only' : 'here · ^G: global';
   const reason = issue === 'taken' ? ' · taken' : issue === 'command' ? ' · = command name' : '';
   return {
     marker: naming.scope === 'global' ? '🌐' : '⚡',

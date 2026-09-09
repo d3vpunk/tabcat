@@ -454,7 +454,7 @@ describe('naming badge', () => {
 
   it('offers the opposite level in the hint', () => {
     expect(namingBadge({ handle: 'haiku', scope: 'here' }, null).hint).toContain('^G: global');
-    expect(namingBadge({ handle: 'haiku', scope: 'global' }, null).hint).toContain('^G: nur hier');
+    expect(namingBadge({ handle: 'haiku', scope: 'global' }, null).hint).toContain('^G: here only');
   });
 
   it('always advertises both commit keys', () => {

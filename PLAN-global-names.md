@@ -194,10 +194,10 @@ naming: { handle: string; scope: NameScope } | null;   // war: string | null
 
 ```text
 ~/proj ❯ claude --dangerously-skip-permissions --effort low --model haiku
- ⚡ haiku▏  hier · ^G: global · ^S: save · enter: save+run · esc
+ ⚡ haiku▏  here · ^G: global · ^S: save · enter: save+run · esc
 
 ~/proj ❯ claude --dangerously-skip-permissions --effort low --model haiku
- 🌐 haiku▏  GLOBAL · ^G: nur hier · ^S: save · enter: save+run · esc
+ 🌐 haiku▏  GLOBAL · ^G: here only · ^S: save · enter: save+run · esc
 ```
 
 ### `^S` — speichern ohne ausführen
