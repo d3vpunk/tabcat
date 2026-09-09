@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { HistoryEntry } from '../engine/model.js';
-import { MagicName, NameIndex } from '../engine/names.js';
+import { MagicName, NameIndex, activeIn, makeName } from '../engine/names.js';
 import { appendName, appendTombstone, namesFileFor, readNames } from '../engine/names-store.js';
 import { Predictor } from '../engine/predictor.js';
 import { detectShell } from '../engine/shell.js';
@@ -68,7 +68,7 @@ export function handleReplCommand(line: string, context: ReplCommandContext): Re
     case 'names': {
       // Read-only listing — creation and deletion live in the Ctrl+N badge.
       const all = context.names ?? [];
-      const isActive = (name: MagicName): boolean => name.cwds.length === 0 || name.cwds.includes(context.cwd);
+      const isActive = (name: MagicName): boolean => activeIn(name, context.cwd);
       const sorted = [...all].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.ts - a.ts);
       showOutput({
         kind: 'names',
@@ -343,7 +343,7 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
           appendTombstone(namesFile, line, Date.now());
         }
       } else {
-        const magicName: MagicName = { name: result.saveName, line, cwds: [cwd], ts: Date.now() };
+        const magicName: MagicName = makeName(result.saveName, line, 'here', cwd, Date.now());
         nameIndex.add(magicName);
         appendName(namesFile, magicName);
       }

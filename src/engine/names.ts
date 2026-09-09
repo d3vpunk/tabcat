@@ -69,7 +69,7 @@ export function specificityOf(name: MagicName, cwd: string): number | null {
   return null;
 }
 
-/** Replaces the hand-built copies in run.ts and engine-host.ts. */
+/** The one predicate for "does this handle apply here" — run.ts and engine-host.ts call this instead of each keeping their own copy. */
 export const activeIn = (name: MagicName, cwd: string): boolean => specificityOf(name, cwd) !== null;
 
 /**

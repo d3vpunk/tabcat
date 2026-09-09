@@ -1,7 +1,7 @@
 import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { DEFAULT_SCORING, HistoryEntry, frecency } from '../engine/model.js';
-import { MagicName, NameIndex, handleIssue, validateHandle } from '../engine/names.js';
+import { MagicName, NameIndex, activeIn, handleIssue, makeName, validateHandle } from '../engine/names.js';
 import { appendName, appendTombstone, namesFileFor, readNames } from '../engine/names-store.js';
 import { FsLike } from '../engine/fs-completer.js';
 import { Prediction, Predictor } from '../engine/predictor.js';
@@ -206,7 +206,7 @@ export class EngineHost {
     this.refreshNames();
     return this.nameIndex
       .all()
-      .filter((name) => name.cwds.length === 0 || name.cwds.includes(cwd))
+      .filter((name) => activeIn(name, cwd))
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
@@ -219,7 +219,7 @@ export class EngineHost {
     if (accepted === null) {
       return { created: false, reason: handleIssue(name.toLowerCase(), line, handles) ?? 'malformed' };
     }
-    const magicName: MagicName = { name: accepted, line, cwds: [cwd], ts: this.now() };
+    const magicName: MagicName = makeName(accepted, line, 'here', cwd, this.now());
     if (!appendName(this.namesFile, magicName)) {
       // Nothing on disk means no other shell and not the REPL would ever see
       // this handle — do not pretend it exists.
