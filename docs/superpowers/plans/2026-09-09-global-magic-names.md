@@ -1437,7 +1437,7 @@ git commit -m "feat(daemon): create-global rides in the sub, sparing the wire"
 
 ---
 
-### Task 12: zsh-Plugin — `^Xg`
+### Task 12: zsh-Plugin — `^XL`
 
 **Files:**
 - Modify: `src/plugin/tabcat.plugin.zsh` (Config `:42`, `tabcat-label` `:726`, `zle -N` `:1052`, Bindings `:1064`)
@@ -1445,7 +1445,7 @@ git commit -m "feat(daemon): create-global rides in the sub, sparing the wire"
 
 **Interfaces:**
 - Consumes: `names create-global` (Task 11)
-- Produces: Widget `tabcat-label-global`, Variable `TABCAT_KEY_LABEL_GLOBAL` (Default `^Xg`)
+- Produces: Widget `tabcat-label-global`, Variable `TABCAT_KEY_LABEL_GLOBAL` (Default `^XL`)
 
 **Teststil:** Plugin-Tests sind zsh-Skripte über den Harness (`tests/plugin/harness.ts`: `runZsh`, `withPlugin`). Bindings werden mit `bindkey '<chord>'` inspiziert (`behavior.test.ts:283`), Daemon-Operationen direkt über `_tabcat_request` gefahren (`integration.test.ts:166`). Kein zpty nötig.
 
@@ -1454,9 +1454,9 @@ git commit -m "feat(daemon): create-global rides in the sub, sparing the wire"
 In `tests/plugin/behavior.test.ts`, bei den anderen Binding-Tests (dem `inspect`-Helper der Datei folgen, Muster `:197-206`):
 
 ```ts
-  it('binds ^Xg to the global label widget', () => {
-    const out = inspect(`bindkey '^Xg'`);
-    expect(out).toContain('"^Xg" tabcat-label-global');
+  it('binds ^XL to the global label widget', () => {
+    const out = inspect(`bindkey '^XL'`);
+    expect(out).toContain('"^XL" tabcat-label-global');
   });
 
   it('leaves ^Xl on the directory-scoped widget', () => {
@@ -1500,15 +1500,15 @@ als vollständiges Skript im Stil des Nachbartests, plus die Auflösung aus eine
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run tests/plugin/behavior.test.ts -t "^Xg"`
-Expected: FAIL — `bindkey '^Xg'` meldet „no such key binding".
+Run: `npx vitest run tests/plugin/behavior.test.ts -t "^XL"`
+Expected: FAIL — `bindkey '^XL'` meldet „no such key binding".
 
 - [ ] **Step 3: Write minimal implementation**
 
 Config (`:42`), nach `TABCAT_KEY_LABEL`:
 
 ```sh
-: ${TABCAT_KEY_LABEL_GLOBAL:='^Xg'}
+: ${TABCAT_KEY_LABEL_GLOBAL:='^XL'}
 ```
 
 `tabcat-label` (`:726`) wird ein Rumpf mit Scope-Argument, plus zwei dünne Widgets:
@@ -1577,7 +1577,7 @@ Expected: PASS. Der Integrationstest braucht ein gebautes `dist` — falls die S
 
 ```bash
 git add src/plugin/tabcat.plugin.zsh tests/plugin/behavior.test.ts tests/plugin/integration.test.ts
-git commit -m "feat(plugin): ^Xg labels a command for every directory"
+git commit -m "feat(plugin): ^XL labels a command for every directory"
 ```
 
 ---
@@ -1616,18 +1616,18 @@ Den `**Scope:**`-Punkt ersetzen:
 Nach der `^Xl`-Zeile:
 
 ```markdown
-| `^Xg` | **G**lobal label: name the current command for every directory |
+| `^XL` | G**l**obal label: name the current command for every directory (same action as `^Xl`, uppercase — `^Xg`/`^XG` are taken by zsh's builtin `list-expand`) |
 ```
 
 In der Konfigurationstabelle die Key-Zeile ersetzen:
 
 ```markdown
-| `TABCAT_KEY_LABEL` / `_LABEL_GLOBAL` / `_FORGET` / `_QUERY` / `_MENU` | `^Xl` / `^Xg` / `^Xf` / `^Xq` / `^Xv` | Rebind the chords |
+| `TABCAT_KEY_LABEL` / `_LABEL_GLOBAL` / `_FORGET` / `_QUERY` / `_MENU` | `^Xl` / `^XL` / `^Xf` / `^Xq` / `^Xv` | Rebind the chords |
 ```
 
 - [ ] **Step 4: Verify**
 
-Run: `grep -n "Ctrl+G\|\^Xg\|LABEL_GLOBAL" README.md`
+Run: `grep -n "Ctrl+G\|\^XL\|LABEL_GLOBAL" README.md`
 Expected: alle drei Tabellen und der Magic-Names-Abschnitt getroffen.
 
 - [ ] **Step 5: Commit**

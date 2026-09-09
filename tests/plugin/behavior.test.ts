@@ -209,6 +209,26 @@ describe.skipIf(!zsh)('plugin: setup wiring', () => {
     expect(out).toContain('"^Xv" tabcat-menu');
   });
 
+  it('binds ^XL to the global label widget', () => {
+    // NOT ^Xg: in a default emacs keymap zsh itself already binds ^Xg (and
+    // ^XG) to the builtin list-expand widget, so tabcat would skip it as
+    // "already bound" (see the "skips a chord that is already taken" test
+    // below). ^XL — same action as ^Xl, uppercase for larger reach — is
+    // verified free the same way the other four defaults are.
+    const out = inspect(`bindkey '^XL'`);
+    expect(out).toContain('"^XL" tabcat-label-global');
+  });
+
+  it('leaves ^Xl on the directory-scoped widget', () => {
+    const out = inspect(`bindkey '^Xl'`);
+    expect(out).toContain('"^Xl" tabcat-label');
+  });
+
+  it('honors TABCAT_KEY_LABEL_GLOBAL', () => {
+    const out = inspect(`bindkey '^Xy'`, { env: { TABCAT_KEY_LABEL_GLOBAL: '^Xy' } });
+    expect(out).toContain('"^Xy" tabcat-label-global');
+  });
+
   it('leaves the zsh defaults on ^N, ^R and the ^X prefix alone', () => {
     // The whole reason for two-stroke chords: no muscle memory breaks.
     const out = inspect(`

@@ -61,7 +61,7 @@ Verworfen wurden dafür zwei Alternativen:
 | Kollision | Gilt **nur innerhalb derselben Ebene**. Ein lokales Handle darf ein globales beschatten; ein globales darf entstehen, obwohl irgendwo ein gleichnamiges lokales liegt |
 | Scope-Wahl (REPL) | `^G` togglet im offenen `Ctrl+N`-Badge. Sichtbar in der Badge-Zeile, damit die Funktion sich selbst erklärt |
 | Speichern ohne Ausführen | `^S` im Badge. Nötig, weil das Umschalten eines bestehenden Handles sonst das Kommando startet |
-| Scope-Wahl (Plugin) | Eigener Chord `^Xg`, konfigurierbar wie die anderen vier |
+| Scope-Wahl (Plugin) | Eigener Chord `^XL`, konfigurierbar wie die anderen vier |
 | Protokoll | Additiver `sub`-Wert `create-global`. **Kein** achtes Feld: die Arity-Prüfung ist strikt und die Swift-GUI sendet 7 Felder |
 | Anzeige | Scope-Marker im REPL-Badge und in den Listen. **Nicht** im Discovery-Badge von Plugin und GUI |
 | Tombstones | Bekommen eine eigene Funktion, damit `cwds: []` im Code ausschließlich „global" heißt |
@@ -236,9 +236,12 @@ nicht erinnern).
 
 ## Oberfläche: zsh-Plugin
 
-`^Xg` als eigenes Widget `tabcat-label-global`, konfigurierbar über
+`^XL` als eigenes Widget `tabcat-label-global`, konfigurierbar über
 `TABCAT_KEY_LABEL_GLOBAL` wie die vier bestehenden Chords
-(`tabcat.plugin.zsh:42`).
+(`tabcat.plugin.zsh:42`). Nicht `^Xg`: sowohl `^Xg` als auch `^XG` sind in
+einer Standard-Emacs-Keymap bereits an das eingebaute `list-expand` gebunden
+(mit `zsh -f -i -c "bindkey '^Xg'"` nachgemessen) — `^XL`, dieselbe Aktion wie
+`^Xl` in Großschreibung, ist frei.
 
 `tabcat-label` und `tabcat-label-global` sind **ein gemeinsamer Rumpf** mit
 einem Scope-Argument, kein zweites Widget mit kopiertem Körper. Der
@@ -313,7 +316,7 @@ Plugin zeigt diesen Grund bereits an (`tabcat.plugin.zsh:751`), und seit
   `blockingHandles`-Semantik am Daemon.
 - **`protocol.test.ts`**: `create-global` wird geparst, Arity bleibt 7, eine
   unbekannte `sub` bleibt `bad_value`.
-- **`plugin/zpty.test.ts`**: `^Xg` legt global an, `^Xl` unverändert lokal.
+- **`plugin/zpty.test.ts`**: `^XL` legt global an, `^Xl` unverändert lokal.
 - **Guard-Test**: greppt den Quellbaum und schlägt fehl, wenn `.cwds`
   außerhalb von `src/engine/names*.ts` auftaucht. Die mechanische Fassung der
   Anforderung „stabile Grundlage" — ohne ihn erodiert die Kapselung beim
@@ -361,8 +364,8 @@ nötig, weil zwei Stufen von der Sortierreihenfolge getragen werden.
 5. **REPL-Render.** Badge-Marker und Hint-Zeile, Toast, `:names`-Spalte.
 6. **CLI.** `tabcat names` mit Scope-Spalte.
 7. **Daemon.** `namesCreate(scope, …)`, `sub: 'create-global'` im Protokoll.
-8. **Plugin.** `^Xg`, gemeinsamer Rumpf, `TABCAT_KEY_LABEL_GLOBAL`.
-9. **Doku.** README: Tastentabelle (`^G`, `^S`, `^Xg`), Magic-Names-Abschnitt
+8. **Plugin.** `^XL`, gemeinsamer Rumpf, `TABCAT_KEY_LABEL_GLOBAL`.
+9. **Doku.** README: Tastentabelle (`^G`, `^S`, `^XL`), Magic-Names-Abschnitt
    (Scope, Präzedenz), Konfigurationstabelle.
 
 Nach jedem Schritt läuft die Suite grün; Schritt 1–3 sind für sich schon eine
