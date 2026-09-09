@@ -131,9 +131,9 @@ describe('REPL commands', () => {
     expect(output[0]).toEqual({
       kind: 'names',
       names: [
-        { name: 'everywhere', line: 'cmd-c', active: true },
-        { name: 'here', line: 'cmd-b', active: true },
-        { name: 'elsewhere', line: 'cmd-a', active: false },
+        { name: 'everywhere', line: 'cmd-c', active: true, scope: 'global' },
+        { name: 'here', line: 'cmd-b', active: true, scope: 'here' },
+        { name: 'elsewhere', line: 'cmd-a', active: false, scope: 'here' },
       ],
     });
   });
@@ -142,6 +142,35 @@ describe('REPL commands', () => {
     const output: ReplOutput[] = [];
     expect(handleReplCommand(':names', { ...context, showOutput: (value) => output.push(value) })).toBe('handled');
     expect(output[0]).toEqual({ kind: 'names', names: [] });
+  });
+
+  describe(':names reports the scope', () => {
+    const CWD = '/home/dev/project';
+
+    it('hands the panel a scope per handle', () => {
+      const output: ReplOutput[] = [];
+      const names = [
+        { name: 'haiku', line: 'claude --model haiku', cwds: [], ts: 2 },
+        { name: 'dep', line: 'docker compose exec php composer install', cwds: [CWD], ts: 1 },
+      ];
+
+      expect(handleReplCommand(':names', { ...context, cwd: CWD, names, showOutput: (v) => output.push(v) })).toBe('handled');
+      expect(output[0]).toEqual({
+        kind: 'names',
+        names: [
+          { name: 'haiku', line: 'claude --model haiku', active: true, scope: 'global' },
+          { name: 'dep', line: 'docker compose exec php composer install', active: true, scope: 'here' },
+        ],
+      });
+    });
+
+    it('keeps a foreign handle listed but inactive', () => {
+      const output: ReplOutput[] = [];
+      const names = [{ name: 'dep', line: 'cargo build', cwds: ['/elsewhere'], ts: 1 }];
+
+      handleReplCommand(':names', { ...context, cwd: CWD, names, showOutput: (v) => output.push(v) });
+      expect(output[0]).toMatchObject({ names: [{ name: 'dep', active: false, scope: 'here' }] });
+    });
   });
 
   it('acceptedLineFor previews the replace-prefix accept (discovery badge)', () => {

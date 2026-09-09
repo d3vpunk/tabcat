@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useStdin } from 'ink';
 import { Predictor, RankedCandidate } from '../engine/predictor.js';
 import { CompletionTelemetry } from '../engine/model.js';
-import { HandleIssue, NameIndex, handleIssue } from '../engine/names.js';
+import { HandleIssue, NameIndex, NameScope, handleIssue } from '../engine/names.js';
 import { fuzzySearch } from './history-search.js';
 import { nextBoundary } from './text-nav.js';
 import { HandlerContext, KeyEvent, KeyOutcome, NamingState, PromptState, enterPasteMode, handleKey, initialPromptState } from './prompt-state.js';
@@ -237,7 +237,7 @@ export function showReplHelp(): void {
 
 export type ReplOutput =
   | { kind: 'history'; entries: readonly { number: number; line: string }[] }
-  | { kind: 'names'; names: readonly { name: string; line: string; active: boolean }[] }
+  | { kind: 'names'; names: readonly { name: string; line: string; active: boolean; scope: NameScope }[] }
   | { kind: 'stats'; stats: ReplStats; historyFile: string }
   | { kind: 'version'; version: string }
   | { kind: 'cwd'; cwd: string }
@@ -272,15 +272,18 @@ export function ReplOutputPanel({ output }: { output: ReplOutput }) {
           ) : (
             output.names.map((entry) => (
               <Box key={`${entry.name}${entry.line}`}>
+                <Box width={2}>
+                  <Text dimColor={!entry.active}>{entry.scope === 'global' ? '🌐' : '⚡'}</Text>
+                </Box>
                 <Box width={nameWidth}>
                   {entry.active ? <Text color="magenta" bold>{entry.name}</Text> : <Text dimColor>{entry.name}</Text>}
                 </Box>
-                <Text dimColor={!entry.active}>{truncateEnd(singleLine(entry.line), contentWidth - nameWidth - 2)}</Text>
+                <Text dimColor={!entry.active}>{truncateEnd(singleLine(entry.line), contentWidth - nameWidth - 4)}</Text>
               </Box>
             ))
           )}
           {output.names.some((entry) => !entry.active) && (
-            <Text dimColor>dimmed: belong to other directories</Text>
+            <Text dimColor>dimmed: belong to other directories · 🌐 applies everywhere</Text>
           )}
         </MagicPanel>
       );
@@ -766,10 +769,17 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
         </Box>
       ) : naming !== null ? (
         <Box>
-          <Text backgroundColor={namingIssue !== null ? 'red' : 'blue'} color="whiteBright" bold>
-            {` ${namingBadge(naming, namingIssue).marker} ${naming.handle}▏ `}
-          </Text>
-          <Text dimColor>{namingBadge(naming, namingIssue).hint}</Text>
+          {(() => {
+            const badge = namingBadge(naming, namingIssue);
+            return (
+              <>
+                <Text backgroundColor={namingIssue !== null ? 'red' : 'blue'} color="whiteBright" bold>
+                  {` ${badge.marker} ${naming.handle}▏ `}
+                </Text>
+                <Text dimColor>{badge.hint}</Text>
+              </>
+            );
+          })()}
         </Box>
       ) : searchQuery !== null ? (
         <Box

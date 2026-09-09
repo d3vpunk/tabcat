@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { HistoryEntry } from '../engine/model.js';
-import { MagicName, NameIndex, activeIn, makeName } from '../engine/names.js';
+import { MagicName, NameIndex, activeIn, makeName, scopeOf } from '../engine/names.js';
 import { appendName, appendTombstone, namesFileFor, readNames } from '../engine/names-store.js';
 import { Predictor } from '../engine/predictor.js';
 import { detectShell } from '../engine/shell.js';
@@ -73,7 +73,7 @@ export function handleReplCommand(line: string, context: ReplCommandContext): Re
       const sorted = [...all].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.ts - a.ts);
       showOutput({
         kind: 'names',
-        names: sorted.map((name) => ({ name: name.name, line: name.line, active: isActive(name) })),
+        names: sorted.map((name) => ({ name: name.name, line: name.line, active: isActive(name), scope: scopeOf(name) })),
       });
       return 'handled';
     }
