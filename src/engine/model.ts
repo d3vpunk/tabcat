@@ -87,7 +87,7 @@ const MS_PER_DAY = 86_400_000;
 const MS_PER_HOUR = 3_600_000;
 
 /** Does the chunk contain at least one word character? (separators/spaces: no) */
-const isInformative = (chunkText: string): boolean => /[\p{L}\p{N}]/u.test(chunkText);
+export const isInformative = (chunkText: string): boolean => /[\p{L}\p{N}]/u.test(chunkText);
 
 /**
  * Variable n-grams over chunk sequences: each edge (context -> next chunk)

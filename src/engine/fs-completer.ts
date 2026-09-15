@@ -47,6 +47,32 @@ export function completePathToken(token: string, cwd: string, fs: FsLike, home?:
     .map((e) => ({ text: e.isDir ? `${e.name}/` : e.name, isDir: e.isDir }));
 }
 
+/**
+ * Does `target` name a directory when resolved from `cwd`? `..`, `-` and a
+ * bare `~` always do; `~/x` resolves against `home`. Answers true when it
+ * cannot tell (no home directory for `~/x`) — the caller demotes on false,
+ * and demoting what might well exist is worse than not demoting.
+ * Case-insensitive like completePathToken: the macOS filesystem is too.
+ */
+export function directoryExists(target: string, cwd: string, fs: FsLike, home?: string): boolean {
+  if (target === '' || target === '.' || target === '..' || target === '-' || target === '~') return true;
+  // Learned lines carry shell escapes (`My\ Dir`); the filesystem does not.
+  let path = stripTrailingSlash(target.replace(/\\(.)/g, '$1'));
+  if (path.startsWith('~/')) {
+    if (home === undefined) return true;
+    path = home + path.slice(1);
+  }
+  if (!path.startsWith('/')) path = joinPath(cwd, path);
+  const slash = path.lastIndexOf('/');
+  const dir = slash === 0 ? '/' : path.slice(0, slash);
+  const base = path.slice(slash + 1);
+  if (base === '' || base === '.' || base === '..') return true;
+  const entries = fs.readdir(dir);
+  if (!entries) return false;
+  const baseLower = base.toLowerCase();
+  return entries.some((e) => e.isDir && e.name.toLowerCase() === baseLower);
+}
+
 const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 function stripTrailingSlash(path: string): string {

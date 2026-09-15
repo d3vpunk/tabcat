@@ -12,7 +12,7 @@
 <p align="center">
   <img alt="Node.js ≥ 20" src="https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-614%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-710%20passing-brightgreen">
   <img alt="Shells" src="https://img.shields.io/badge/shells-zsh%20%7C%20bash-blue">
   <img alt="macOS overlay: beta" src="https://img.shields.io/badge/macOS%20overlay-beta-orange?logo=apple">
 </p>
@@ -44,8 +44,8 @@ tabcat's engine is a pure, terminal-independent TypeScript library:
 1. **Lexer** — every command line is split into small typed chunks (words, flags, separators, quotes, operators, spaces). Reconstruction is lossless: `join(lex(line)) === line`.
 2. **Chunk model** — variable-length n-grams over chunk sequences (with `BEGIN`/`END` sentinels) record every occurrence with timestamp and working directory.
 3. **Frecency scoring** — each occurrence scores as long-term decay (7-day half-life, with a floor so old favorites stay findable) plus a heavily weighted short-term decay (4-hour half-life: "today I'm working on X"), multiplied by a boost for commands learned in the current directory.
-4. **Variability-aware merge** — when you hit Tab, tabcat looks ahead from the top candidate and merges following chunks only while the branching factor is ≈ 1 (the top continuation carries ≥ 90 % of the probability mass). At the first genuine fork — or where your lines usually end — the merge stops. That's the anti-overshoot rule.
-5. **Prediction** — history candidates are ranked structurally (longest matching context wins; shorter back-off contexts only fill gaps), then enriched with live filesystem completion: case-insensitive, quote- and escape-aware (`doc` + Tab → `Documents`), and deliberately suppressed right after flag values so `-m` doesn't flood you with paths.
+4. **Variability-aware merge** — when you hit Tab, tabcat looks ahead from the top candidate and merges following chunks only while the branching factor is ≈ 1 (the top continuation carries ≥ 90 % of the probability mass). At the first genuine fork — or where your lines usually end — the merge stops. That's the anti-overshoot rule. A fork right behind a word you have fully typed is not a dead end, though: `cd projects` + Tab lists the fork's branches (`/radio`, `/tabby`, …), most frecent first, and Tab takes the top one — the ghost shows it beforehand, Shift+Tab takes it back.
+5. **Prediction** — history candidates are ranked structurally (longest matching context wins; shorter back-off contexts only fill gaps), then enriched with live filesystem completion: case-insensitive, quote- and escape-aware (`doc` + Tab → `Documents`), and deliberately suppressed right after flag values so `-m` doesn't flood you with paths. `cd` is checked against the filesystem: a directory learned at home (`projects`) but missing from where you stand ranks behind the ones that exist here — demoted, never dropped.
 
 Typos don't poison the model: commands that exited with 126/127 (command not found / not executable) are never learned.
 

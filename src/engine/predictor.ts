@@ -1,7 +1,7 @@
 import { Chunk, lex } from './lexer.js';
 import { BEGIN, ChunkModel, DEFAULT_SCORING, END, HistoryEntry, ScoringConfig } from './model.js';
-import { DEFAULT_MERGE, MergeConfig, mergeForward } from './merge.js';
-import { completePathToken, FsLike } from './fs-completer.js';
+import { DEFAULT_MERGE, MergeConfig, forkBranches, mergeForward } from './merge.js';
+import { completePathToken, directoryExists, FsLike } from './fs-completer.js';
 import type { NameIndex } from './names.js';
 
 export interface RankedCandidate {
@@ -154,7 +154,7 @@ export class Predictor {
     // old commands findable, not let them dominate forever.
     const effectiveLevel = (meta: { level: number; score: number }): number =>
       prefix === '' && meta.score < this.config.staleThreshold ? meta.level + 1000 : meta.level;
-    const candidates: RankedCandidate[] = [...byText.entries()]
+    let candidates: RankedCandidate[] = [...byText.entries()]
       .sort((a, b) => {
         const levelA = effectiveLevel(a[1]);
         const levelB = effectiveLevel(b[1]);
@@ -182,6 +182,35 @@ export class Predictor {
             : {}),
         };
       });
+
+    // A fully typed word right before a fork: the merge stopped at once, the
+    // top candidate has nothing left to insert and Tab would be a dead key.
+    // The fork's branches are what belongs in the dropdown there — `cd projects`
+    // offers `/radio` and `/tabby`, not `projects` again.
+    const dead = candidates[0];
+    if (dead !== undefined && dead.insert === '' && dead.source !== 'fs') {
+      const branches = forkBranches(this.model, [...context, prefix], input.cwd, now, this.config.merge);
+      if (branches.length > 0) {
+        const expanded: RankedCandidate[] = branches.map((branch) => ({
+          insert: branch.text,
+          display: prefix + branch.text,
+          score: branch.score,
+          source: 'history',
+        }));
+        candidates = [...expanded, ...candidates.filter((c) => c.insert !== '')].slice(0, this.config.topN);
+      }
+    }
+
+    // `cd` goes somewhere. A directory learned at home (`projects`) is the
+    // wrong answer inside a project however frecent it is. Candidates whose
+    // directory exists from here rank first; the rest is demoted, never
+    // dropped — the volume may simply be unmounted right now.
+    if (this.opts.fs !== undefined && chunks[0]?.text === 'cd') {
+      const fs = this.opts.fs;
+      const reachable = (c: RankedCandidate): boolean =>
+        c.source === 'fs' || directoryExists(cdTarget(left, c, prefix), input.cwd, fs, this.opts.homeDir);
+      candidates = [...candidates.filter(reachable), ...candidates.filter((c) => !reachable(c))];
+    }
 
     // Magic handles only compete on the first token: the handle stands in for
     // a whole command, so mid-line it can never be what the user means. They
@@ -261,6 +290,19 @@ function shellPathToken(line: string): { token: string; prefix: string; rawPrefi
 
   const slash = token.lastIndexOf('/');
   return { token, prefix: token.slice(slash + 1), rawPrefixLength: line.length - rawPrefixStart };
+}
+
+/**
+ * The directory a `cd` candidate would move to: the first word after `cd` on
+ * the line as it reads once the candidate is accepted. `cd gui/macos && swift
+ * run` is checked on `gui/macos` alone.
+ */
+function cdTarget(left: string, candidate: RankedCandidate, prefix: string): string {
+  const replaced = candidate.replacePrefixLength ?? prefix.length;
+  const accepted = left.slice(0, left.length - replaced) + candidate.display;
+  const argument = accepted.slice('cd'.length).trimStart();
+  const end = argument.search(/[\s;|&]/);
+  return end < 0 ? argument : argument.slice(0, end);
 }
 
 /**
