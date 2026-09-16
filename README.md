@@ -5,347 +5,101 @@
 <h1 align="center">tabcat</h1>
 
 <p align="center">
-  <strong>Chunk-based shell autocomplete that learns from <em>your</em> commands.</strong><br>
-  Tab, tab, tab through the stable parts of a command — type only the part that changes.
+  <strong>Stop retyping the parts of commands that never change.</strong><br>
+  Tab through the familiar parts. Type what's different. Keep moving.
 </p>
 
 <p align="center">
   <img alt="Node.js ≥ 20" src="https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white">
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-740%20passing-brightgreen">
-  <img alt="Shells" src="https://img.shields.io/badge/shells-zsh%20%7C%20bash-blue">
-  <img alt="macOS overlay: beta" src="https://img.shields.io/badge/macOS%20overlay-beta-orange?logo=apple">
+  <img alt="Shells: zsh and bash" src="https://img.shields.io/badge/shells-zsh%20%7C%20bash-blue">
 </p>
 
----
+tabcat is a **smart terminal prompt that learns from your shell history**. Instead of accepting a whole suggested command and editing it back, use Tab to fill in the recurring parts and type the bits that change.
 
-## Why tabcat?
+## Less typing, more doing
 
-Most shell completion tools are **opportunistic**: they guess at whole commands from a giant, anonymous history and throw suggestions at you that you accept maybe once in a while. Autosuggestion plugins replay your *entire last matching line*; static completion specs only know flags, not *your* workflow.
+You know the command. You've run some version of it dozens of times. Only the branch, path or argument is different today.
 
-tabcat is different by design: it helps you with the commands **you already run, over and over**. It breaks every command you execute into small chunks, learns which chunks are stable and which vary, and then lets you Tab through the stable scaffolding of a command — stopping exactly at the points where *you* usually make a decision.
-
-- **Chunk-based, not line-based.** `git checkout feature/` and `git checkout bugfix/` share a stable prefix. tabcat completes `git checkout ` as one unit and *stops* — because that's where your commands diverge. Type the variable part yourself, then Tab again.
-- **It learns from every use.** A frecency model (frequency × recency) with a strong short-term memory means what you worked on *this morning* outranks what you ran three weeks ago. It even knows *where*: commands learned in the current directory get a boost.
-- **It never overshoots.** A variability-aware merge looks ahead along the prediction and stops Tab at the first real fork — you never accept five chunks of wrong suggestion you have to delete.
-- **It's yours alone.** Everything is learned locally from your own history, stored in a local append-only file. No network, no telemetry leaves your machine, no model trained on other people's commands.
+Suppose your history contains `git checkout develop` and `git checkout feature/login`:
 
 ```text
-$ git ch█                     ← you type two chunks
-  git checkout develop        ← tabcat offers ranked candidates
-$ git checkout ▊              ← Tab accepts the stable part, stops at the fork
-$ git checkout feature/42-fix▊ ← you type the variable part — Tab again
+You type      git ch
+Press Tab     git checkout
+You finish    git checkout feature/new-dashboard
 ```
 
-## How it works
+tabcat learns the shared `git checkout ` prefix and stops before the branch choice. For longer commands, keep alternating Tab and typing as you go.
 
-tabcat's engine is a pure, terminal-independent TypeScript library:
+- **Reuse the familiar parts.** Completion works in chunks, not just whole lines, and stops where your learned commands diverge.
+- **Stay in context.** Recent and frequently used commands rank higher, with a boost for commands you've run in the current directory.
+- **Keep it local.** Learning and prediction happen on your machine. No cloud model, account or telemetry.
 
-1. **Lexer** — every command line is split into small typed chunks (words, flags, separators, quotes, operators, spaces). Reconstruction is lossless: `join(lex(line)) === line`.
-2. **Chunk model** — variable-length n-grams over chunk sequences (with `BEGIN`/`END` sentinels) record every occurrence with timestamp and working directory.
-3. **Frecency scoring** — each occurrence scores as long-term decay (7-day half-life, with a floor so old favorites stay findable) plus a heavily weighted short-term decay (4-hour half-life: "today I'm working on X"), multiplied by a boost for commands learned in the current directory.
-4. **Variability-aware merge** — when you hit Tab, tabcat looks ahead from the top candidate and merges following chunks only while the branching factor is ≈ 1 (the top continuation carries ≥ 90 % of the probability mass). At the first genuine fork — or where your lines usually end — the merge stops. That's the anti-overshoot rule. A fork right behind a word you have fully typed is not a dead end, though: `cd projects` + Tab lists the fork's branches (`/radio`, `/tabby`, …), most frecent first, and Tab takes the top one — the ghost shows it beforehand, Shift+Tab takes it back. Where the line usually ends (`git status`), the ghost stays quiet and the branches wait in the dropdown.
-5. **Prediction** — history candidates are ranked structurally (longest matching context wins; shorter back-off contexts only fill gaps), then enriched with live filesystem completion: case-insensitive, quote- and escape-aware (`doc` + Tab → `Documents`), and deliberately suppressed right after flag values so `-m` doesn't flood you with paths. `cd` is checked against the filesystem: a directory learned at home (`projects`) but missing from where you stand ranks behind the ones that exist here — demoted, never dropped.
+## 🚀 Quick start
 
-Typos don't poison the model: commands that exited with 126/127 (command not found / not executable) are never learned.
+**Requirements:** Node.js >= 20, and zsh or bash.
 
-## The REPL
+```bash
+npm install -g tabcat
+tabcat import           # learn from your existing shell history
+tabcat                  # open the smart prompt
+```
 
-tabcat ships an Ink-based smart prompt with ghost text and a scrolling dropdown:
+Start typing a command you use often. Suggestions appear as ghost text and in a dropdown below your input. Importing your history gives tabcat something to work with immediately; it keeps learning as you use it.
 
-| Key | Action |
+Prefer to try it without a global install? Run `npx tabcat import`, then `npx tabcat`.
+
+**No shell configuration changes needed.** Press `Ctrl+D` to leave tabcat and return to your regular shell.
+
+> **A smart prompt, not a persistent shell session:** each command runs in an isolated shell. Directory changes persist, but exports, functions and aliases defined during the session do not carry over to the next command. Startup aliases are imported at launch. [More about shell sessions](docs/guide.md#shell-sessions).
+
+## Make yourself at home
+
+Four shortcuts cover the basics:
+
+| Key | What it does |
 |---|---|
-| `Tab` | Accept the selected candidate (fully merged); cycles when nothing new to insert |
-| `→` | Accept one chunk at a time |
+| `Tab` | Accept the selected completion |
+| `→` | Accept just one chunk |
 | `Shift+Tab` | Undo the last accept |
-| `↑` / `↓` | Empty line: history (substring-filtered once you typed); otherwise: move in the dropdown |
-| `Ctrl+R` | Fuzzy history search |
-| `Ctrl+N` | Name this command (magic name) |
-| `Ctrl+G` | In the naming badge: switch between *this directory* and *everywhere* |
-| `Ctrl+S` | In the naming badge: save without running the command |
-| `Ctrl+X` | Forget the shown magic name |
-| `Ctrl+Backspace` | Delete one chunk · `Alt+Backspace` deletes fast |
-| `Ctrl+A/E/U/W/K/L` | Familiar readline shortcuts |
-| `Esc` | Close the dropdown |
-| `Ctrl+D` | Exit |
+| `Ctrl+R` | Search your history |
 
-Half-typed lines are stashed when you browse history and restored when you come back — like zsh.
+Use `↑` / `↓` to move through suggestions. Working in a small IDE terminal? Try `tabcat --minimal` for a compact prompt.
 
-**Multiline pastes** bypass completion entirely: the block appears verbatim below the prompt, `Enter` runs it exactly as pasted (backslash continuations, quoting, and one-command-per-line stay intact), `Esc` discards it. Nothing auto-runs — unlike a plain terminal, a pasted trailing newline never submits. Single-line pastes keep the normal inline behavior.
+[Full key reference, paste behavior and optional autostart →](docs/guide.md)
 
-Each command runs in an **isolated shell**. The working directory persists between commands (including `cd x && make`); exported variables, shell functions, options and aliases defined *during* the session apply only to that one command. Aliases from your shell's startup config are imported once at launch.
+## ⚡ Give long commands a short name
 
-## Magic names
-
-Long, hard-to-read commands get a short handle you assign yourself — no AI, no config file, just `Ctrl+N` on a typed command:
-
-```text
-~/proj ❯ docker compose -f qlico/compose.yaml run php vendor/bin/phpstan analyze src
- ⚡ phpstananalyze▏   here · ^G: global · a-z 0-9 · ^S: save · enter: save+run · esc: cancel
-```
-
-- **Create:** type the command, press `Ctrl+N`, type a handle (3–16 chars, `a-z 0-9`), Enter saves it *and* runs the command. Esc cancels without executing. Enter never blocks: an invalid or colliding handle just runs the command without saving.
-- **Use:** type the handle as the first word — it appears as the top suggestion with its resolution; `Tab` expands it (append args as usual). Typing the *exact* handle and pressing Enter runs the resolved command in one step. History always records the full command, never the handle.
-- **Discover:** when you type (or complete to) a command that already has a handle here, a ` ⚡ handle ` badge shows it — that's how you learn your own shortcuts.
-- **Scope:** a handle belongs to the directory it was created in and never surfaces elsewhere (relative paths stay safe). Press `Ctrl+G` in the badge to make it apply **everywhere** instead — right for commands without a place, like `claude --model haiku`. The badge says which one you are on: `⚡ here` or `🌐 GLOBAL`.
-- **Both at once:** the nearer handle wins. A local `dep` and a global `dep` can coexist — in the directory that defines the local one it resolves there, everywhere else to the global one. A name is only "taken" on the level you are naming on, so `Ctrl+G` can clear a red badge.
-- **Switching later:** type the handle, `Tab` to expand it, `Ctrl+N` to reopen the badge (handle and scope prefilled), `Ctrl+G`, then `Ctrl+S` — saves without running the command.
-- **Edit/delete:** `Ctrl+N` on a named command prefills the handle; clear it and press Enter to delete. Or press `Ctrl+X` whenever a magic name is in your way — on a selected ⚡ suggestion or the ⚡ badge — to forget it on the spot, without running anything.
-- `:names` lists your handles in the REPL, `tabcat names` on the CLI. Set `TABCAT_MAGIC_NAMES=0` to turn the feature off.
-
-## Getting started
-
-**Requirements:** Node.js ≥ 20, and zsh or bash.
+Some commands are worth remembering, but not worth typing:
 
 ```bash
-npm install -g tabcat   # or run without installing: npx tabcat
-
-tabcat import           # seed the model from your zsh/bash history
-tabcat                  # start the smart prompt
+docker compose -f qlico/compose.yaml run php vendor/bin/phpstan analyze src
 ```
 
-<details>
-<summary>From source</summary>
+Type the command, press **`Ctrl+N`**, name it `analyze`, and press **`Ctrl+S`** to save without running.
 
-```bash
-git clone https://github.com/d3vpunk/tabcat.git tabcat
-cd tabcat
-npm install             # prepare script builds dist automatically
-npm link                # puts the CLI on your PATH
-```
+Next time, type `analyze` and press `Tab` to expand the full command. Inspect it, add arguments or run it as-is. An exact name followed by `Enter` also runs it directly.
 
-</details>
+Names belong to the current directory by default, so each project can have its own `analyze`. Switch to a global name with `Ctrl+G` when you want it available everywhere.
 
-Run `tabcat import` once — tabcat parses your existing `~/.zsh_history` or `~/.bash_history` (shell auto-detected via `$SHELL`) and starts with useful suggestions from day one. Re-imports are idempotent.
+[More about magic names →](docs/guide.md#magic-names)
 
-### Autostart (optional)
+## Good to know
 
-To drop into tabcat in every new terminal, add this to the end of your `~/.zshrc` or `~/.bashrc`:
+- **Your history stays on disk.** Commands and names are stored under `~/.config/tabcat/` by default. Treat those files as sensitive shell history. [Data and storage](docs/reference.md#local-data).
+- **It learns your workflow over time.** Imported history supplies commands; directory-specific ranking develops as you run them in tabcat.
+- **The project is young and evolving.** The REPL is the main interface and is being polished. Feedback and contributions are welcome.
 
-```sh
-# start tabcat automatically in interactive terminals
-if [[ $- == *i* ]] && [[ -z "$TABCAT_AUTOSTART" ]] && command -v tabcat >/dev/null; then
-  export TABCAT_AUTOSTART=1
-  command tabcat repl
-fi
-```
+## Other ways to use tabcat
 
-The guard variable keeps nested shells (and the commands tabcat itself runs) from re-entering the REPL. Quitting tabcat (`Ctrl+D` or `:exit`) lands you in your regular shell.
+**Already happy in zsh?** The [zsh plugin](docs/zsh-plugin.md) adds completion inside your existing shell session and shares the REPL's learned history and magic names.
 
-> Using a lazy-loaded version manager (nvm & co.)? Make sure the Node bin directory is on `PATH` before this block runs — e.g. `export PATH="$NVM_DIR/versions/node/<your-version>/bin:$PATH"` — otherwise `command -v tabcat` comes up empty at startup.
+**No terminal open?** The [macOS overlay](gui/macos/README.md) is a separate launcher powered by the same engine. It is currently in beta.
 
-## zsh plugin (variant 2)
+## 📚 Go deeper
 
-Instead of a separate prompt, tabcat can also run **inside your own zsh** — ghost
-text, Tab accept and learning in the shell you already use. Both variants share
-`history.jsonl` and `names.jsonl`, so you can switch back and forth and each
-learns from the other.
-
-```bash
-tabcat plugin init zsh              # prints the line for your .zshrc
-tabcat plugin init zsh --check      # preflight: node, zsh, modules, socket path
-```
-
-Add the printed line to `~/.zshrc` (position does not matter — the learning hook
-puts itself first on its own):
-
-```sh
-source /path/to/tabcat/dist/tabcat.plugin.zsh
-```
-
-**Keys.** Every plain Ctrl key is taken by zsh itself, so tabcat uses the `^X`
-family and leaves your muscle memory alone — `^N`, `^R` and the whole `^X`
-prefix keep working:
-
-| Key | Action |
+| Document | What you'll find |
 |---|---|
-| `Tab` | Accept the top candidate. No candidates → your previous Tab binding (compsys, fzf-tab) handles the key |
-| — | Ghost text is suppressed when a suggestion would *correct* what you typed (`doc` → `Documents/`): the terminal can only append after the cursor, so showing the remainder would read `documents/` — different from what Tab inserts. Tab and `^Xv` still offer it |
-| `→` | Accept one chunk (only at the end of the line) |
-| `Shift+Tab` | Undo the last accept |
-| `Enter` | Expand an exact magic-name handle, then run it |
-| `^Xl` | **L**abel: name the current command (magic name) |
-| `^XL` | **L**abel for every directory: name the current command |
-| `^Xf` | **F**orget the name of the current command |
-| `^Xq` | **Q**uery: fuzzy history search |
-| `^Xv` | Candidate menu — **v**iew all candidates (`compadd` + `menu-select`) |
-
-**Configuration** (set before the `source` line):
-
-| Variable | Default | Effect |
-|---|---|---|
-| `TABCAT_GHOST` | `1` | Ghost text on/off |
-| `TABCAT_BADGE` | `1` | ⚡ handle badge on/off — appears as soon as what you type leads to a named command, not only once the line is complete |
-| `TABCAT_GHOST_STYLE` | `fg=8` | Highlight of the ghost text |
-| `TABCAT_KEY_LABEL` / `_LABEL_GLOBAL` / `_FORGET` / `_QUERY` / `_MENU` | `^Xl` / `^XL` / `^Xf` / `^Xq` / `^Xv` | Rebind the chords |
-| `TABCAT_TIMEOUT` | `0.05` | Seconds the shell waits for the daemon before falling back |
-| `TABCAT_NO_LEARN` | unset | Set to `1` to stop learning in this shell |
-| `TABCAT_SOCKET` | derived | Socket path (mirrors `tabcat daemon --socket`) |
-| `TABCAT_WARM_ON_LOAD` | `1` | Start the daemon when the shell starts (~14 ms, fire and forget) instead of on the first keystroke |
-| `TABCAT_FORCE` | unset | Load despite detected conflicts, take bound chords over |
-
-**What tabcat stores, and what it does not.** The plugin learns every command
-you run — except the ones your shell already keeps out of its history:
-
-- commands with a leading space when `hist_ignore_space` is set (the standard
-  way to hide a secret)
-- anything matching your `HISTORY_IGNORE` pattern
-- `history` / `fc` when `hist_no_store` is set
-- everything, in a shell with `TABCAT_NO_LEARN=1`
-
-Learned lines live in `~/.config/tabcat/history.jsonl` (mode 0600), handles in
-`names.jsonl` next to it. Delete either file to forget.
-
-### How the plugin talks to the engine
-
-A background daemon holds the model; the plugin keeps one unix socket open per
-shell and asks it per keystroke.
-
-```bash
-tabcat daemon          # run in the foreground (the plugin starts it on demand)
-tabcat daemon status   # version, protocol, state, pid
-tabcat daemon stop
-tabcat daemon path     # the socket this shell's clients connect to
-```
-
-`daemon path` exists so a front end that cannot import the TypeScript — a script,
-or a GUI in another language — does not have to reimplement the `sun_path` rule a
-third time. It prints one line and touches nothing: `--socket` wins, then
-`$TABCAT_SOCKET`, then the computed default.
-
-The daemon also answers `cwds`, which ranks the directories you actually work in
-by the same frecency curve prediction uses. A shell never needs it — it has a
-working directory. A front end that floats above the desktop does not, and has to
-ask before it can predict anything. Directories only enter that ranking through
-commands tabcat saw itself: imported shell history carries no directory, so the
-answer for a fresh install is empty rather than guessed.
-
-Measured on macOS/zsh 5.9: **0.027 ms** per request over the persistent fd,
-versus ~6 ms for a `nc -U` fork per keystroke and ~110 ms for a Node cold start
-— which is why it is a daemon and why the shell holds the fd open. A cold daemon
-needs ~0.3 s until it listens, so the plugin starts it **at shell startup**,
-fire and forget (~14 ms of your prompt), rather than making your first keystroke
-wait for it. Later shells find the socket and do nothing.
-
-The daemon compacts the history, exits after 45 minutes idle, and answers
-`warming` while it is still building the model so an early Tab falls back
-instead of blocking.
-
-If the daemon is missing, slow or speaks another protocol version, the widgets
-fall back to plain zsh behaviour. The shell never hangs on tabcat.
-
-> bash is not supported as a plugin, and probably never will be — the REPL is
-> the answer there.
-
-## macOS overlay (variant 3, beta)
-
-A Swift launcher for the moment no terminal is open: press ⌥Space, an overlay
-appears with the same predictions, history search and directory ranking the
-plugin gets — served by the same daemon — and runs the command in a real
-pseudo terminal, feeding the result back so overlay usage improves the shared
-model. In daily use and solid, but young. What it does, how to build it and
-what is not built yet: [gui/macos/README.md](gui/macos/README.md).
-
-## CLI
-
-| Command | Description |
-|---|---|
-| `tabcat` / `tabcat repl` | Start the smart prompt |
-| `tabcat --minimal` | Compact prompt for short terminals (IDE panes): one suggestion row with inline counter, no legend line — search, paste mode and naming behave as usual |
-| `tabcat import [--file <path>]` | Seed the model from shell history |
-| `tabcat simulate --line 'git ch' [--cwd <dir>] [--now <ms>] [--json]` | Show the ranking and what Tab would insert — explore and calibrate the algorithm without the UI. `--json` for scripts and bug reports |
-| `tabcat stats` | History overview (entries, directories) |
-| `tabcat names` | List magic names (`Ctrl+N` in the REPL, `^Xl` in the plugin) |
-| `tabcat plugin init zsh [--check]` | Print the `.zshrc` snippet for the zsh plugin, or run the preflight check |
-| `tabcat daemon [status\|stop\|path]` | Prediction daemon for the zsh plugin; `path` prints the socket clients connect to |
-| `tabcat --history <path>` | Use an alternative history file (default: `~/.config/tabcat/history.jsonl`) |
-| `tabcat daemon --socket <path>` | Use an alternative daemon socket (default: `$TABCAT_SOCKET`, else `$XDG_RUNTIME_DIR/tabcat/daemon.sock`, fallback `/tmp/tabcat-<uid>/daemon.sock`) |
-
-## Tuning the algorithm
-
-The defaults in `DEFAULT_SCORING` / `DEFAULT_MERGE` / `DEFAULT_PREDICTOR`:
-
-| Parameter | Default | Effect |
-|---|---|---|
-| `halfLifeDays` | 7 | Long-term decay of frequency |
-| `shortHalfLifeHours` | 4 | Short-term decay ("today I'm working on X") |
-| `shortWeight` | 8 | Weight of the short-term term |
-| `cwdBoost` | 3 | Multiplier for commands learned in the current directory |
-| `backoffPenalty` | 0.3 | Score discount per back-off level (shorter context) |
-| `merge.threshold` | 0.9 | Probability mass the top next chunk must carry to keep merging |
-| `topN` | 50 | Ranked candidate pool (the dropdown shows 5, scrolling) |
-| `staleThreshold` | 0.25 | Below this a candidate counts as stale and ranks behind fresh back-off when no prefix is typed |
-
-The learned history is capped at 20,000 entries; beyond that the append-only file is compacted atomically to the most recent entries (startup-time and memory protection).
-
-## Project layout
-
-```text
-src/
-  engine/            # pure TypeScript library — no terminal dependencies
-    lexer.ts         # line → chunks (lossless)
-    model.ts         # n-gram chunk model, frecency scoring, back-off
-    merge.ts         # variability-aware merge (Tab stops at forks)
-    predictor.ts     # facade: (line, cursor, cwd) → ranked candidates
-    fs-completer.ts  # path completion (injectable FS)
-    shell.ts         # zsh/bash adapters: alias snapshot, exec, history import
-    store.ts         # append-only JSONL history, locking, compaction
-    names.ts         # magic names: handle validation + in-memory index
-    names-store.ts   # append-only names.jsonl with tombstone deletes
-  daemon/            # headless engine host for the zsh plugin
-    protocol.ts      # TSV wire format (zsh has no JSON parser)
-    engine-host.ts   # predictor + names, byte-offset tail follow, compaction
-    server.ts        # unix socket, warm-up, idle exit, connection caps
-    client.ts        # one-shot client for `daemon status|stop`
-    paths.ts         # socket location (sun_path limit, ownership checks)
-  plugin/
-    tabcat.plugin.zsh  # widgets, ghost text, learning hook, key bindings
-    init.ts          # `plugin init zsh` snippet + preflight check
-  repl/              # Ink UI
-    app.tsx          # rendering: prompt, dropdown, ghost text
-    prompt-state.ts  # all UX logic as a pure, testable state machine
-    executor.ts      # isolated shell execution with cwd persistence
-    run.ts           # loop: prompt → execute → learn → prompt
-  cli.ts             # repl / import / simulate / stats / names / daemon / plugin
-gui/
-  macos/             # Swift overlay app (beta): ⌥Space launcher over the daemon socket
-```
-
-## Development
-
-```bash
-npm install
-npm test                                   # engine, daemon, plugin and pty tests
-npx tsx src/cli.ts simulate --line 'git ch'
-npx tsx src/cli.ts repl
-```
-
-The engine is fully decoupled from the terminal — the lexer, model, merge and prediction are tested against scenario suites (context back-off, cwd boost, time shift, filesystem merge) without any TTY.
-
-The plugin is covered on three levels: the TSV wire format and the socket path are pinned to their TypeScript counterparts by cross-language parity tests, the shell functions (privacy filter, buffer surgery, key wiring, hook order) run in a pristine `zsh -f`, and a small `zpty` set drives the real widgets in a real pseudo terminal. zsh is required for those; without it they skip.
-
-## Updating
-
-Nothing to do: the daemon watches its own module file on disk and shuts
-down within a minute of an update replacing it — the next shell start or
-keystroke spawns a fresh one from the new code. `tabcat daemon status`
-shows which version is actually listening.
-
-One exception, once: a daemon started by a version **before** the
-self-check existed keeps running the old code until it idles out
-(45 minutes). Updating from such a version, end it by hand:
-
-```sh
-tabcat daemon stop
-```
-
-While an old daemon is still answering, nothing hangs: an op it does not
-know yet fails with `bad_op`, a protocol bump answers `bad_protocol` — the
-plugin then disables itself for the session and falls back to plain zsh.
-
-History, names and settings files are carried forward unchanged — no
-migration on update.
-
-## Status
-
-tabcat is young and evolving. The engine is feature-complete; the REPL and the zsh plugin are built and being polished. The macOS overlay ([gui/macos](gui/macos/README.md)) is in **beta**: in daily use and solid, with known gaps documented in its README. Feedback and contributions welcome.
+| [REPL guide](docs/guide.md) | Keys, magic names, pasting, shell sessions and autostart |
+| [CLI and configuration](docs/reference.md) | Commands, settings, local data and daemon management |
+| [zsh plugin](docs/zsh-plugin.md) | Setup, key bindings, configuration and history exclusions |
+| [Development and architecture](docs/development.md) | Build from source, prediction algorithm, tuning and tests |
