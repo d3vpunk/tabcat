@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import stringWidth from 'string-width';
+import { takeColumns } from '../../src/repl/display-width.js';
 import { acceptedLine } from '../../src/engine/predictor.js';
 import { ReplOutput, clampMinimalDisplay, extractPaste, homeEndKey, isMultilinePaste, legendVisible, lineWindow, magicCandidates, magicCommandHints, namingBadge, namingIssueFor, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
 import { NameIndex, makeName } from '../../src/engine/names.js';
@@ -406,6 +408,46 @@ describe('Dropdown prefix highlighting (splitMatched)', () => {
 });
 
 describe('Long line window (lineWindow)', () => {
+  it('keeps CJK cursor glyphs and the end cursor inside the column budget', () => {
+    const line = 'echo ' + '界'.repeat(30);
+    for (const avail of [2, 3, 4, 10, 20]) {
+      for (let cursor = 0; cursor <= line.length; cursor++) {
+        const win = lineWindow(line, cursor, avail);
+        expect(win.at || ' ').toBe(line[cursor] ?? ' ');
+        expect(stringWidth(win.before + (win.at || ' ') + win.after)).toBeLessThanOrEqual(avail);
+      }
+    }
+  });
+
+  it('reserves an end cursor when CJK input exactly fills the window', () => {
+    const win = lineWindow('界界界', 3, 6);
+    expect(win.at).toBe(' ');
+    expect(stringWidth(win.before + win.at + win.after)).toBeLessThanOrEqual(6);
+    expect(win.before.startsWith('…')).toBe(true);
+  });
+
+  it('uses a visible blank cursor when one column cannot hold a CJK glyph', () => {
+    expect(lineWindow('界', 0, 1)).toEqual({ before: '', at: ' ', after: '', ghostRemain: 0 });
+  });
+
+  it('counts ghost space in columns and never slices a wide grapheme', () => {
+    const win = lineWindow('界', 1, 5);
+    expect(win.ghostRemain).toBe(3);
+    expect(takeColumns('世界', win.ghostRemain)).toBe('世');
+    expect(takeColumns('世界', 1)).toBe('');
+    expect(takeColumns('👩‍💻x', 2)).toBe('👩‍💻');
+    expect(truncateEnd('世界世界', 6)).toBe('世界…');
+    expect(stringWidth(truncateMiddle('世界世界', 6))).toBeLessThanOrEqual(6);
+  });
+
+  it('does not split combining marks or emoji at window edges', () => {
+    for (const line of ['e\u0301'.repeat(20), '👩‍💻'.repeat(20)]) {
+      const win = lineWindow(line, 0, 8);
+      expect(win.at).toBe(line.startsWith('e') ? 'e\u0301' : '👩‍💻');
+      expect(stringWidth(win.before + win.at + win.after)).toBeLessThanOrEqual(8);
+    }
+  });
+
   it('short lines are rendered completely', () => {
     const win = lineWindow('git status', 10, 80);
     expect(win.before).toBe('git status');

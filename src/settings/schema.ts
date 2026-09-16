@@ -41,6 +41,22 @@ export type SettingSpec =
 
 export const SETTINGS: readonly SettingSpec[] = [
   {
+    key: 'repl.plugins.git.enabled',
+    type: 'bool',
+    default: true,
+    label: 'Git prompt plugin',
+    description: 'Show the branch and working-tree state in the REPL prompt.',
+    appliesLive: true,
+  },
+  {
+    key: 'repl.plugins.clock.enabled',
+    type: 'bool',
+    default: false,
+    label: 'Clock prompt plugin',
+    description: 'Show local time on the right of the REPL prompt when space permits.',
+    appliesLive: true,
+  },
+  {
     key: 'repl.dropdownRows',
     type: 'int',
     default: 5,

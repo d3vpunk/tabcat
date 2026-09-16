@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useStdin } from 'ink';
+import stringWidth from 'string-width';
 import { Predictor, RankedCandidate, acceptedLine } from '../engine/predictor.js';
 import { CompletionTelemetry } from '../engine/model.js';
 import { HandleIssue, NameIndex, NameScope, handleIssue } from '../engine/names.js';
 import { fuzzySearch } from './history-search.js';
-import { nextBoundary } from './text-nav.js';
 import { HandlerContext, KeyEvent, KeyOutcome, NamingState, PromptState, enterPasteMode, handleKey, initialPromptState } from './prompt-state.js';
 import { SETTINGS, specFor } from '../settings/schema.js';
 import { ReplStats } from './stats.js';
+import { promptLayout, usePromptPlugins } from './prompt-plugin-ui.js';
+import { graphemes, takeColumns } from './display-width.js';
 
 const DROPDOWN_ROWS = 5;
 /** Paste-mode preview cap — enough for a typical multiline curl, no flooding. */
@@ -61,6 +63,7 @@ export interface PromptOptions {
    * mode — paste/search hints stay, they ARE the mode UI, not key help.
    */
   footer?: boolean | undefined;
+  plugins?: Readonly<Record<string, boolean>> | undefined;
 }
 
 type CompletionCounters = Omit<CompletionTelemetry, 'durationMs'>;
@@ -426,15 +429,15 @@ const periodLabel = (stats: ReplStats): string => stats.firstTs === null || stat
 export const singleLine = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
 export function truncateEnd(value: string, width: number): string {
-  if (value.length <= width) return value;
-  return width <= 1 ? '…'.slice(0, width) : `${value.slice(0, width - 1)}…`;
+  if (stringWidth(value) <= width) return value;
+  return width <= 1 ? (width > 0 ? '…' : '') : `${takeColumns(value, width - 1)}…`;
 }
 
 export function truncateMiddle(value: string, width: number): string {
-  if (value.length <= width) return value;
-  if (width <= 1) return '…'.slice(0, width);
+  if (stringWidth(value) <= width) return value;
+  if (width <= 1) return width > 0 ? '…' : '';
   const left = Math.ceil((width - 1) / 2);
-  return `${value.slice(0, left)}…${value.slice(value.length - (width - 1 - left))}`;
+  return `${takeColumns(value, left)}…${takeColumns(value, width - 1 - left, true)}`;
 }
 
 export function showReplOutput(output: ReplOutput): void {
@@ -464,7 +467,7 @@ interface AppProps extends PromptOptions {
   onDone: (result: PromptResult) => void;
 }
 
-function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, onName, onForgetHistory, minimal = false, dropdownRows: dropdownRowsSetting = DROPDOWN_ROWS, footer = true, onDone }: AppProps) {
+function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names, onForget, onName, onForgetHistory, minimal = false, dropdownRows: dropdownRowsSetting = DROPDOWN_ROWS, footer = true, plugins = {}, onDone }: AppProps) {
   const { exit } = useApp();
   const { internal_eventEmitter } = useStdin();
 
@@ -482,6 +485,13 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
   });
 
   const { line, cursor, selected, dropdownVisible, historyFilter, searchQuery, searchSelected, naming, pasted } = state;
+  const segments = usePromptPlugins(cwd, plugins, line.length > 0 || naming !== null || pasted !== null, finished);
+  const [columns, setColumns] = useState(process.stdout.columns ?? 80);
+  useEffect(() => {
+    const resize = () => setColumns(process.stdout.columns ?? 80);
+    process.stdout.on('resize', resize);
+    return () => { process.stdout.off('resize', resize); };
+  }, []);
 
   // ^X mutates the NameIndex inside the predictor mid-prompt — the counter
   // invalidates the memo below so the forgotten candidate disappears at once.
@@ -696,8 +706,22 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
 
   const promptLabel = shortenCwd(cwd, homeDir);
   const promptColor = lastExitCode === undefined || lastExitCode === 0 ? 'cyan' : 'red';
-  const promptWidth = promptLabel.length + 2; // "❯ "
-  const lineAvail = Math.max(20, (process.stdout.columns ?? 80) - promptWidth);
+  const layout = promptLayout(columns, promptLabel, segments, stringWidth(line));
+  const lineAvail = layout.inputWidth;
+  const prefix = <>
+    <Box width={layout.pathWidth} flexShrink={0}><Text color={promptColor} wrap="truncate-middle">{promptLabel}</Text></Box>
+    {layout.left.map((segment, index) => {
+      const start = segment.highlight?.start ?? 0;
+      const end = segment.highlight?.end ?? segment.text.length;
+      const color = { muted: 'gray', success: 'green', warning: 'yellow', error: 'red' }[segment.tone];
+      return <Box key={index} width={stringWidth(segment.text) + 3} flexShrink={0}>
+        <Text wrap="truncate-end" color="gray">
+          {` · ${segment.text.slice(0, start)}`}<Text color={color}>{segment.text.slice(start, end)}</Text>{segment.text.slice(end)}
+        </Text>
+      </Box>;
+    })}
+    <Text color={promptColor}>{columns >= 4 ? ' ❯ ' : columns > 1 ? '❯' : ''}</Text>
+  </>;
   const win = lineWindow(line, cursor, lineAvail);
   const magicHints = magicCommandHints(line);
   // No inline ghost for magic candidates: the handle is not a textual prefix
@@ -707,7 +731,8 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
     candidates[selectedIndex]?.source !== 'magic'
       ? (candidates[selectedIndex]?.insert ?? '')
       : '';
-  const visibleGhost = ghost.slice(0, Math.max(0, win.ghostRemain));
+  const visibleGhost = takeColumns(ghost, win.ghostRemain);
+  const ghostHead = graphemes.segment(visibleGhost)[Symbol.iterator]().next().value?.segment ?? '';
 
   const namingIssue: HandleIssue | null = naming !== null ? namingIssueFor(naming, line, cwd, names) : null;
   // Hoisted next to namingIssue: the badge branch renders marker and hint,
@@ -725,32 +750,36 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
     // preview of the block instead so the terminal keeps a scrollback trace.
     const frozen = pasted !== null ? singleLine(pasted) : line;
     return (
-      <Box>
-        <Text color={promptColor}>{promptLabel} ❯ </Text>
-        <Text>{frozen.length > lineAvail ? `${frozen.slice(0, lineAvail - 1)}…` : frozen}</Text>
+      <Box width={columns} flexWrap="nowrap">
+        {prefix}
+        <Box width={layout.inputWidth} flexShrink={0}><Text wrap="truncate-end">{frozen}</Text></Box>
+        {layout.right.map((segment, index) => <Text key={index} dimColor>{`  ${segment.text}`}</Text>)}
       </Box>
     );
   }
 
   return (
     <Box flexDirection="column">
-      <Box>
-        <Text color={promptColor}>{promptLabel} ❯ </Text>
-        {pasted !== null ? (
-          // Anything typed before the paste is merged into the block below —
-          // the editor line stays blank until the block runs or is discarded.
-          <Text dimColor>(paste)</Text>
-        ) : naming !== null ? (
-          // Frozen while naming — only the badge below is being edited.
-          <Text>{line.length > lineAvail ? `${line.slice(0, lineAvail - 1)}…` : line}</Text>
-        ) : (
-          <>
-            <Text>{win.before}</Text>
-            <Text inverse>{win.at || (visibleGhost ? visibleGhost.slice(0, nextBoundary(visibleGhost, 0)) : ' ')}</Text>
-            <Text>{win.after}</Text>
-            <Text dimColor>{cursor === line.length ? visibleGhost.slice(nextBoundary(visibleGhost, 0)) : ''}</Text>
-          </>
-        )}
+      <Box width={columns} flexWrap="nowrap">
+        {prefix}
+        <Box width={layout.inputWidth} flexShrink={0}>
+          {pasted !== null ? (
+            // Anything typed before the paste is merged into the block below —
+            // the editor line stays blank until the block runs or is discarded.
+            <Text dimColor wrap="truncate-end">(paste)</Text>
+          ) : naming !== null ? (
+            // Frozen while naming — only the badge below is being edited.
+            <Text wrap="truncate-end">{truncateEnd(line, lineAvail)}</Text>
+          ) : (
+            <Text wrap="truncate-end">
+              <Text>{win.before}</Text>
+              <Text inverse>{win.at || ghostHead || ' '}</Text>
+              <Text>{win.after}</Text>
+              <Text dimColor>{cursor === line.length ? visibleGhost.slice(ghostHead.length) : ''}</Text>
+            </Text>
+          )}
+        </Box>
+        {layout.right.map((segment, index) => <Text key={index} dimColor>{`  ${segment.text}`}</Text>)}
       </Box>
 
       {pasted !== null ? (
@@ -1084,30 +1113,28 @@ export function lineWindow(line: string, cursor: number, avail: number): {
   after: string;
   ghostRemain: number;
 } {
-  if (line.length <= avail) {
+  const current = [...graphemes.segment(line)].find(({ index, segment }) => index <= cursor && cursor < index + segment.length);
+  const start = current?.index ?? line.length;
+  const end = start + (current?.segment.length ?? 0);
+  const lineWidth = stringWidth(line);
+  if (lineWidth + (cursor === line.length ? 1 : 0) <= avail) {
     return {
-      before: line.slice(0, cursor),
-      at: line.slice(cursor, nextBoundary(line, cursor)),
-      after: line.slice(nextBoundary(line, cursor)),
-      ghostRemain: avail - line.length,
+      before: line.slice(0, start),
+      at: line.slice(start, end),
+      after: line.slice(end),
+      ghostRemain: avail - lineWidth,
     };
   }
-  // Reserve 2 columns for possible `…` markers; cursor-centered.
-  const contentAvail = Math.max(10, avail - 2);
-  const half = Math.floor(contentAvail / 2);
-  let start = Math.max(0, cursor - half);
-  let end = Math.min(line.length, start + contentAvail);
-  if (end - start < contentAvail) start = Math.max(0, end - contentAvail);
-  const leftMark = start > 0 ? '…' : '';
-  const rightMark = end < line.length ? '…' : '';
-  const before = leftMark + line.slice(start, cursor);
-  const cursorEnd = Math.min(nextBoundary(line, cursor), end);
-  const at = line.slice(cursor, cursorEnd) || ' ';
-  const after = line.slice(cursorEnd, end) + rightMark;
-  // Ghost space: only relevant when the cursor is at end of line (otherwise
-  // no ghost is shown). Remaining columns in the window after before/at/after.
-  const ghostRemain = cursor === line.length ? Math.max(0, avail - before.length - at.length - after.length) : 0;
-  return { before, at, after, ghostRemain };
+  const at = takeColumns(current?.segment ?? ' ', avail) || ' ';
+  // The cursor wins over clipping markers, even on a two-column terminal.
+  const contentAvail = Math.max(0, avail - stringWidth(at) - 2);
+  let before = takeColumns(line.slice(0, start), Math.floor(contentAvail / 2), true);
+  let after = takeColumns(line.slice(end), contentAvail - stringWidth(before));
+  before = takeColumns(line.slice(0, start), contentAvail - stringWidth(after), true);
+  let spare = avail - stringWidth(before + at + after);
+  if (before.length < start && spare > 0) { before = `…${before}`; spare--; }
+  if (end + after.length < line.length && spare > 0) after += '…';
+  return { before, at, after, ghostRemain: 0 };
 }
 
 export function shortenCwd(cwd: string, home: string): string {

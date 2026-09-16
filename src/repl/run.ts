@@ -295,6 +295,10 @@ export async function runRepl(historyFile: string = defaultHistoryFile(), option
       minimal: options.minimal ?? false,
       dropdownRows: intSetting(settings, 'repl.dropdownRows'),
       footer: boolSetting(settings, 'repl.footer'),
+      plugins: {
+        git: boolSetting(settings, 'repl.plugins.git.enabled'),
+        clock: boolSetting(settings, 'repl.plugins.clock.enabled'),
+      },
       // ^X on a history suggestion: every occurrence leaves the file, then the
       // model relearns without it. The splices are in place on purpose — the
       // running prompt holds `entries` and `historyLines` by reference, and a

@@ -54,6 +54,23 @@ Prefer to try it without a global install? Run `npx tabcat import`, then `npx ta
 
 ## Make yourself at home
 
+The REPL includes optional prompt plugins, controlled through `:settings`:
+
+- `repl.plugins.git.enabled` (on by default): branch, local changes and Git operation state. Requires an installed `git`; never fetches from the network.
+- `repl.plugins.clock.enabled` (off by default): local time, on the right of the same prompt line when space permits.
+
+Git keeps the branch neutral and colors only its status: green `✓` for a clean
+working tree, yellow `●` for changes, `↔ merge` / `↻ rebase` for an operation,
+and red `! conflict` for conflicts. A detached HEAD shows `◇ detached` (or
+`● detached` with changes). Conflicts take priority over operations and changes.
+`↑N ↓N` shows ahead/behind against the locally known upstream; a green check
+does not mean everything is pushed or tests have passed.
+
+Changes apply on returning from settings. Plugins do not change the macOS UI or
+the zsh prompt. Git refreshes for each new prompt without blocking input; results
+that arrive after you start editing are omitted for that prompt to keep the input
+position stable. Optional context gives way to the command on narrow terminals.
+
 Four shortcuts cover the basics:
 
 | Key | What it does |

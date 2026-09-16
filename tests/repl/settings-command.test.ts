@@ -123,6 +123,8 @@ describe(':settings command', () => {
 describe(':settings completion hints', () => {
   it('completes keys and the reset verb after the command', () => {
     expect(magicCommandHints(':settings ')?.map(({ command }) => command)).toEqual([
+      ':settings repl.plugins.git.enabled',
+      ':settings repl.plugins.clock.enabled',
       ':settings repl.dropdownRows',
       ':settings repl.footer',
       ':settings gui.launcherWidth',
@@ -136,6 +138,8 @@ describe(':settings completion hints', () => {
 
   it('completes keys after reset', () => {
     expect(magicCommandHints(':settings reset ')?.map(({ command }) => command)).toEqual([
+      ':settings reset repl.plugins.git.enabled',
+      ':settings reset repl.plugins.clock.enabled',
       ':settings reset repl.dropdownRows',
       ':settings reset repl.footer',
       ':settings reset gui.launcherWidth',
