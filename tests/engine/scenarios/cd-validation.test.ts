@@ -98,6 +98,94 @@ describe('Scenario: cd targets are checked against the filesystem', () => {
     expect(prediction.candidates[0]?.insert).toBe(' backend');
   });
 
+  it('a command that merely starts with cd is not a cd', () => {
+    const p = predictor([...repeat('cdk deploy', 10, 1 * HOURS, PROJECT_A), ...repeat('cd src', 1, 5 * HOURS, HOME)], fs);
+    const prediction = p.predict({ line: 'cd', cursor: 2, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('cdk deploy');
+  });
+
+  it('an escaped space in the target is resolved before the check', () => {
+    const p = predictor(
+      [...repeat('cd other', 1, 5 * HOURS, PROJECT_A), ...repeat('cd My\\ Dir', 5, 1 * HOURS, HOME)],
+      fakeFs({ [PROJECT_A]: [{ name: 'My Dir', isDir: true }, { name: 'other', isDir: true }] }),
+    );
+    const prediction = p.predict({ line: 'cd ', cursor: 3, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('My\\ Dir');
+  });
+
+  it('a quoted target is resolved', () => {
+    const p = predictor(
+      [...repeat('cd other', 1, 5 * HOURS, PROJECT_A), ...repeat('cd "My Dir"', 5, 1 * HOURS, HOME)],
+      fakeFs({ [PROJECT_A]: [{ name: 'My Dir', isDir: true }, { name: 'other', isDir: true }] }),
+    );
+    const prediction = p.predict({ line: 'cd ', cursor: 3, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('"My Dir"');
+  });
+
+  it('flags before the target are skipped', () => {
+    const p = predictor(
+      [...repeat('cd other', 1, 5 * HOURS, PROJECT_A), ...repeat('cd -P src', 5, 1 * HOURS, HOME)],
+      fakeFs({ [PROJECT_A]: [{ name: 'src', isDir: true }, { name: 'other', isDir: true }] }),
+    );
+    const prediction = p.predict({ line: 'cd ', cursor: 3, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('-P src');
+  });
+
+  it('leading whitespace does not hide the cd', () => {
+    const p = predictor(history, fs);
+    const prediction = p.predict({ line: '  cd ', cursor: 5, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('backend');
+  });
+
+  it('cd at the end of a compound command is checked', () => {
+    const p = predictor(
+      [...repeat('git pull && cd nope', 5, 1 * HOURS, HOME), ...repeat('git pull && cd src', 1, 5 * HOURS, HOME)],
+      fakeFs({ [PROJECT_A]: [{ name: 'src', isDir: true }] }),
+    );
+    const line = 'git pull && cd ';
+    const prediction = p.predict({ line, cursor: line.length, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('src');
+  });
+
+  it('`~/` and `~` are always reachable', () => {
+    const p = predictor(
+      [...repeat('cd nope', 5, 1 * HOURS, HOME), ...repeat('cd ~/', 1, 5 * HOURS, HOME), ...repeat('cd ~', 1, 6 * HOURS, HOME)],
+      fakeFs({ [PROJECT_A]: [] }),
+    );
+    const prediction = p.predict({ line: 'cd ', cursor: 3, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('~');
+    expect(prediction.candidates.at(-1)?.display).toBe('nope');
+  });
+
+  it('a target the shell would expand cannot be judged and is not demoted', () => {
+    const p = predictor(
+      [...repeat('cd nope', 5, 1 * HOURS, HOME), ...repeat('cd $HOME/projects', 1, 5 * HOURS, HOME)],
+      fakeFs({ [PROJECT_A]: [] }),
+    );
+    const prediction = p.predict({ line: 'cd ', cursor: 3, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('$HOME/projects');
+  });
+
+  it('asks the filesystem once per candidate', () => {
+    const names = Array.from({ length: 12 }, (_, i) => `dir${i}`);
+    const base = fakeFs({ [PROJECT_A]: names.map((name) => ({ name, isDir: true })) });
+    let asked = 0;
+    const counting = { readdir: base.readdir, isDirectory: (path: string) => (asked++, base.isDirectory(path)) };
+    const p = predictor(names.map((name, i) => repeat(`cd ${name}`, 1, (i + 1) * HOURS, PROJECT_A)).flat(), counting);
+    const prediction = p.predict({ line: 'cd ', cursor: 3, cwd: PROJECT_A });
+
+    expect(prediction.candidates).toHaveLength(12);
+    expect(asked).toBe(12);
+  });
+
   it('other commands are not directories and stay untouched', () => {
     const p = predictor(
       [...repeat('make shell', 5, 1 * HOURS, HOME), ...repeat('make src', 1, 5 * HOURS, PROJECT_A)],

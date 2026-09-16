@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { Server, Socket, createServer } from 'node:net';
 import { FsLike } from '../engine/fs-completer.js';
 import { NameScope } from '../engine/names.js';
-import { RankedCandidate } from '../engine/predictor.js';
+import { RankedCandidate, acceptedLine } from '../engine/predictor.js';
 import { SETTINGS, SettingSpec, parseInput, specFor } from '../settings/schema.js';
 import { clearSetting, readSettings, settingsFileFor, writeSetting } from '../settings/store.js';
 import { VERSION } from '../version.js';
@@ -429,13 +429,6 @@ function constraintOf(spec: SettingSpec): string {
   if (spec.type === 'int') return `${spec.min}..${spec.max}`;
   if (spec.type === 'enum') return spec.options.join('|');
   return '';
-}
-
-/** How the line would read after accepting `candidate` — same rule the REPL
- *  applies in `acceptedLineFor`, so both front ends badge the same commands. */
-function acceptedLine(line: string, cursor: number, candidate: RankedCandidate, prefixLength: number): string {
-  const replaceFrom = cursor - (candidate.replacePrefixLength ?? prefixLength);
-  return line.slice(0, Math.max(0, replaceFrom)) + candidate.display + line.slice(cursor);
 }
 
 /**

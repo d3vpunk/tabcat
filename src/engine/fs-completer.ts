@@ -7,6 +7,8 @@ export interface FsEntry {
 export interface FsLike {
   /** Entries of a directory, or null if not readable/existent. */
   readdir(absoluteDir: string): FsEntry[] | null;
+  /** Is there a directory at this absolute path? One stat, never a listing. */
+  isDirectory(absolutePath: string): boolean;
 }
 
 export interface FsCandidate {
@@ -48,29 +50,20 @@ export function completePathToken(token: string, cwd: string, fs: FsLike, home?:
 }
 
 /**
- * Does `target` name a directory when resolved from `cwd`? `..`, `-` and a
- * bare `~` always do; `~/x` resolves against `home`. Answers true when it
- * cannot tell (no home directory for `~/x`) — the caller demotes on false,
- * and demoting what might well exist is worse than not demoting.
- * Case-insensitive like completePathToken: the macOS filesystem is too.
+ * Does `target` name a directory when resolved from `cwd`? Answers true
+ * whenever it cannot tell — a target the shell would still expand (`$HOME/x`,
+ * `~alice`, a glob), or `~/x` without a known home — because the caller
+ * demotes on false, and demoting what may well exist is worse than not
+ * demoting. `target` is a decoded word: quotes and escapes already resolved.
  */
 export function directoryExists(target: string, cwd: string, fs: FsLike, home?: string): boolean {
-  if (target === '' || target === '.' || target === '..' || target === '-' || target === '~') return true;
-  // Learned lines carry shell escapes (`My\ Dir`); the filesystem does not.
-  let path = stripTrailingSlash(target.replace(/\\(.)/g, '$1'));
-  if (path.startsWith('~/')) {
-    if (home === undefined) return true;
-    path = home + path.slice(1);
-  }
-  if (!path.startsWith('/')) path = joinPath(cwd, path);
-  const slash = path.lastIndexOf('/');
-  const dir = slash === 0 ? '/' : path.slice(0, slash);
-  const base = path.slice(slash + 1);
-  if (base === '' || base === '.' || base === '..') return true;
-  const entries = fs.readdir(dir);
-  if (!entries) return false;
-  const baseLower = base.toLowerCase();
-  return entries.some((e) => e.isDir && e.name.toLowerCase() === baseLower);
+  if (/[$`*?[]/.test(target)) return true;
+  if (target.startsWith('~') && target !== '~' && !target.startsWith('~/')) return true;
+  const path = stripTrailingSlash(target);
+  if (path === '' || path === '.' || path === '..' || path === '-' || path === '~') return true;
+  if (path.startsWith('~/')) return home === undefined ? true : fs.isDirectory(home + path.slice(1));
+  if (path.startsWith('/')) return fs.isDirectory(path);
+  return fs.isDirectory(joinPath(cwd, path.startsWith('./') ? path.slice(2) : path));
 }
 
 const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);

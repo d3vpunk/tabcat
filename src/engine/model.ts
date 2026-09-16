@@ -169,19 +169,35 @@ export class ChunkModel {
    */
   longestContinuations(context: readonly string[], cwd: string, now: number): Continuation[] {
     for (let k = Math.min(context.length, this.config.maxContext); k >= 1; k--) {
-      const key = context.slice(context.length - k).join(KEY_SEP);
-      const byNext = this.edges.get(key);
-      if (!byNext || byNext.size === 0) continue;
-
-      return [...byNext.entries()]
-        .map(([text, occs]) => ({
-          text,
-          score: occs.reduce((sum, o) => sum + this.occurrenceScore(o, cwd, now), 0),
-          level: 0,
-        }))
-        .sort((a, b) => b.score - a.score);
+      const distribution = this.distribution(context.slice(context.length - k), cwd, now);
+      if (distribution.length > 0) return distribution;
     }
     return [];
+  }
+
+  /**
+   * Distribution from exactly `context` (capped at maxContext), never from a
+   * shorter one: empty when the line as typed was never seen. A fork is only
+   * real where the typed line has actually been — a shorter context would
+   * lend the continuations of some unrelated command.
+   */
+  exactContinuations(context: readonly string[], cwd: string, now: number): Continuation[] {
+    const k = Math.min(context.length, this.config.maxContext);
+    if (k === 0) return [];
+    return this.distribution(context.slice(context.length - k), cwd, now);
+  }
+
+  /** Scored continuations of one exact context key, strongest first. */
+  private distribution(slice: readonly string[], cwd: string, now: number): Continuation[] {
+    const byNext = this.edges.get(slice.join(KEY_SEP));
+    if (!byNext || byNext.size === 0) return [];
+    return [...byNext.entries()]
+      .map(([text, occs]) => ({
+        text,
+        score: occs.reduce((sum, o) => sum + this.occurrenceScore(o, cwd, now), 0),
+        level: 0,
+      }))
+      .sort((a, b) => b.score - a.score);
   }
 
   /** Frecency: long-term decay + heavily weighted short-term decay, cwd boost. */

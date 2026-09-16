@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ReplOutput, acceptedLineFor, clampMinimalDisplay, extractPaste, homeEndKey, isMultilinePaste, legendVisible, lineWindow, magicCandidates, magicCommandHints, namingBadge, namingIssueFor, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
+import { acceptedLine } from '../../src/engine/predictor.js';
+import { ReplOutput, clampMinimalDisplay, extractPaste, homeEndKey, isMultilinePaste, legendVisible, lineWindow, magicCandidates, magicCommandHints, namingBadge, namingIssueFor, sanitizeInsert, shortenCwd, singleLine, splitMatched, trackCompletion, truncateEnd, truncateMiddle } from '../../src/repl/app.js';
 import { NameIndex, makeName } from '../../src/engine/names.js';
 import { PromptState, handleKey, initialPromptState } from '../../src/repl/prompt-state.js';
 import { handleReplCommand, isInteractiveTerminal, persistForget, persistName } from '../../src/repl/run.js';
@@ -173,12 +174,12 @@ describe('REPL commands', () => {
     });
   });
 
-  it('acceptedLineFor previews the replace-prefix accept (discovery badge)', () => {
+  it('acceptedLine previews the replace-prefix accept (discovery badge)', () => {
     const candidate = { display: 'git status', insert: ' status', score: 1, source: 'history' as const };
-    expect(acceptedLineFor('git', 3, candidate, 3)).toBe('git status');
+    expect(acceptedLine('git', 3, candidate, 3)).toBe('git status');
 
     const replacing = { ...candidate, replacePrefixLength: 2 };
-    expect(acceptedLineFor('gi', 2, replacing, 2)).toBe('git status');
+    expect(acceptedLine('gi', 2, replacing, 2)).toBe('git status');
   });
 
   it('passes unknown magic commands through to the shell', () => {

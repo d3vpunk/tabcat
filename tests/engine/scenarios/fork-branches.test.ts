@@ -58,6 +58,47 @@ describe('Scenario: fork branches after a completed word', () => {
     expect(tabChain(p, PROJECT_A).join('')).toBe('cd projects/radio');
   });
 
+  it('a case-corrected word expands from its learned spelling', () => {
+    const p = predictor([...repeat('cd Projects/radio', 3, 2 * HOURS), ...repeat('cd Projects', 2, 3 * HOURS)]);
+    const line = 'cd projects';
+    const prediction = p.predict({ line, cursor: line.length, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('Projects/radio');
+    expect(prediction.candidates[0]?.insert).toBe('/radio');
+  });
+
+  it('a shorter context never lends its branches to the fork', () => {
+    // `projects` alone was seen after `ls`; that fork belongs to `ls`, not to `cd`.
+    const p = predictor([
+      ...repeat('cd Projects/radio', 3, 2 * HOURS),
+      ...repeat('cd Projects', 2, 3 * HOURS),
+      ...repeat('ls projects/junk', 1, 40 * HOURS),
+    ]);
+    const line = 'cd projects';
+    const prediction = p.predict({ line, cursor: line.length, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('Projects/radio');
+    expect(prediction.candidates.some((c) => c.display.includes('junk'))).toBe(false);
+  });
+
+  it('where the line usually ends, the plain word stays first and the branches follow', () => {
+    const p = predictor([...repeat('git status', 20, 1 * HOURS), ...repeat('git status --short', 1, 30 * HOURS)]);
+    const line = 'git status';
+    const prediction = p.predict({ line, cursor: line.length, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.display).toBe('status');
+    expect(prediction.candidates[0]?.insert).toBe('');
+    expect(prediction.candidates[1]?.insert).toBe(' --short');
+  });
+
+  it('a lone separator is a branch when nothing follows it', () => {
+    const p = predictor([...repeat('cd auto', 5, 1 * HOURS), ...repeat('cd auto/', 1, 2 * HOURS)]);
+    const line = 'cd auto';
+    const prediction = p.predict({ line, cursor: line.length, cwd: PROJECT_A });
+
+    expect(prediction.candidates[0]?.insert).toBe('/');
+  });
+
   it('a partially typed word is still plain prefix completion', () => {
     const p = predictor(history);
     const line = 'cd proj';

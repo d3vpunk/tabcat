@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useStdin } from 'ink';
-import { Predictor, RankedCandidate } from '../engine/predictor.js';
+import { Predictor, RankedCandidate, acceptedLine } from '../engine/predictor.js';
 import { CompletionTelemetry } from '../engine/model.js';
 import { HandleIssue, NameIndex, NameScope, handleIssue } from '../engine/names.js';
 import { fuzzySearch } from './history-search.js';
@@ -847,7 +847,7 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
               // that already has a handle here — teach it inline.
               const discovered =
                 isSelected && names && cursor === line.length
-                  ? names.handleFor(acceptedLineFor(line, cursor, candidate, prediction.prefix.length).trim(), cwd)
+                  ? names.handleFor(acceptedLine(line, cursor, candidate, prediction.prefix.length).trim(), cwd)
                   : null;
               const display = minimal
                 ? clampMinimalDisplay(
@@ -921,17 +921,6 @@ function PromptApp({ predictor, cwd, homeDir, historyLines, lastExitCode, names,
       )}
     </Box>
   );
-}
-
-/** The line as it would read after accepting `candidate` (replace-prefix semantics of acceptSelected). */
-export function acceptedLineFor(
-  line: string,
-  cursor: number,
-  candidate: RankedCandidate,
-  prefixLength: number,
-): string {
-  const replaceFrom = cursor - (candidate.replacePrefixLength ?? prefixLength);
-  return line.slice(0, replaceFrom) + candidate.display + line.slice(cursor);
 }
 
 const sourceMarker = (source: RankedCandidate['source']): string =>
