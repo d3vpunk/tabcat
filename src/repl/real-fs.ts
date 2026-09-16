@@ -9,14 +9,15 @@ const CACHE_TTL_MS = 2000;
 // the first key is the oldest.
 const CACHE_MAX_DIRS = 256;
 const cache = new Map<string, { at: number; entries: FsEntry[] | null }>();
+const dirCache = new Map<string, { at: number; isDir: boolean }>();
 
-function cacheSet(dir: string, value: { at: number; entries: FsEntry[] | null }): void {
-  cache.delete(dir); // re-insert -> fresh insertion order
-  cache.set(dir, value);
-  while (cache.size > CACHE_MAX_DIRS) {
-    const oldest = cache.keys().next().value;
+function cacheSet<T>(store: Map<string, T>, key: string, value: T): void {
+  store.delete(key); // re-insert -> fresh insertion order
+  store.set(key, value);
+  while (store.size > CACHE_MAX_DIRS) {
+    const oldest = store.keys().next().value;
     if (oldest === undefined) break;
-    cache.delete(oldest);
+    store.delete(oldest);
   }
 }
 
@@ -34,8 +35,18 @@ export const realFs: FsLike = {
     } catch {
       entries = null;
     }
-    cacheSet(absoluteDir, { at: Date.now(), entries });
+    cacheSet(cache, absoluteDir, { at: Date.now(), entries });
     return entries;
+  },
+
+  // One stat, no listing: the existence question is asked per cd candidate
+  // on every keystroke, and listing the parent would stat every symlink in it.
+  isDirectory(absolutePath: string): boolean {
+    const cached = dirCache.get(absolutePath);
+    if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.isDir;
+    const isDir = isDirectory(absolutePath);
+    cacheSet(dirCache, absolutePath, { at: Date.now(), isDir });
+    return isDir;
   },
 };
 

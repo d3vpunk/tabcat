@@ -150,7 +150,7 @@ export class EngineHost {
   /**
    * Which handle to show as a badge for the line being typed, in the order the
    * REPL uses: the typed line itself, then the line the top candidate would
-   * produce (`app.tsx` does the same via acceptedLineFor), then a prefix hint so
+   * produce (`app.tsx` does the same via acceptedLine), then a prefix hint so
    * the indicator appears while typing rather than after the last chunk.
    */
   handleHint(line: string, cwd: string, acceptedLine?: string): string {

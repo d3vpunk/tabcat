@@ -8,7 +8,7 @@ import { SETTINGS } from '../../src/settings/schema.js';
 import { settingsFileFor } from '../../src/settings/store.js';
 import { TestClient } from './helpers.js';
 
-const NO_FS = { readdir: () => null };
+const NO_FS = { readdir: () => null, isDirectory: () => false };
 
 describe('settings request parsing', () => {
   const line = (...tail: readonly string[]): string => ['settings', 'p1', String(PROTOCOL_VERSION), ...tail].join('\t');

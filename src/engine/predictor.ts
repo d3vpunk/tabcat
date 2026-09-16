@@ -1,7 +1,8 @@
 import { Chunk, lex } from './lexer.js';
 import { BEGIN, ChunkModel, DEFAULT_SCORING, END, HistoryEntry, ScoringConfig } from './model.js';
-import { DEFAULT_MERGE, MergeConfig, mergeForward } from './merge.js';
-import { completePathToken, FsLike } from './fs-completer.js';
+import { DEFAULT_MERGE, MergeConfig, forkBranches, mergeForward } from './merge.js';
+import { completePathToken, directoryExists, FsLike } from './fs-completer.js';
+import { cdTarget, escapeFsText, quoteContext, shellPathToken } from './shell-syntax.js';
 import type { NameIndex } from './names.js';
 
 export interface RankedCandidate {
@@ -58,6 +59,30 @@ export interface PredictInput {
   cwd: string;
 }
 
+/**
+ * The line as it reads after accepting `candidate`: `replacePrefixLength`
+ * (or the filter prefix) characters left of the cursor are replaced by
+ * `display`. The one accept rule — the REPL applies it, the daemon badges by
+ * it, and a ranking step that judges a candidate by its outcome asks it.
+ */
+export function acceptedLine(line: string, cursor: number, candidate: RankedCandidate, prefixLength: number): string {
+  const replaceFrom = Math.max(0, cursor - (candidate.replacePrefixLength ?? prefixLength));
+  return line.slice(0, replaceFrom) + candidate.display + line.slice(cursor);
+}
+
+/** What every ranking step knows about the line being typed. */
+interface Scope {
+  /** The line left of the cursor. */
+  readonly left: string;
+  readonly chunks: readonly Chunk[];
+  /** The word at the cursor, possibly incomplete — the filter prefix. */
+  readonly prefix: string;
+  /** BEGIN plus every chunk before the prefix — the model context. */
+  readonly context: readonly string[];
+  readonly cwd: string;
+  readonly now: number;
+}
+
 export class Predictor {
   private model: ChunkModel;
 
@@ -86,16 +111,38 @@ export class Predictor {
     for (const entry of entries) this.learn(entry);
   }
 
+  /**
+   * A pipeline: the ranked list from history and filesystem, then one step per
+   * rule that reshapes it, each with its reasoning on its own doc block. A
+   * future per-command rule (`ls`, `git checkout`) is one more step here, not
+   * one more branch inside the ranking.
+   */
   predict(input: PredictInput): Prediction {
-    const now = this.opts.now();
+    const scope = this.scopeOf(input);
+    let candidates = this.rankHistoryAndFs(scope);
+    candidates = this.expandDeadFork(candidates, scope);
+    candidates = this.preferReachableCdTargets(candidates, scope);
+    candidates = this.prependMagic(candidates, scope);
+    return { candidates: candidates.slice(0, this.config.topN), prefix: scope.prefix };
+  }
+
+  private scopeOf(input: PredictInput): Scope {
     const left = input.line.slice(0, input.cursor);
     const chunks = lex(left);
-
     // A word directly at the cursor is potentially incomplete -> filter prefix.
     const last = chunks.at(-1);
     const prefix = last && last.kind === 'word' ? last.text : '';
     const context = [BEGIN, ...(prefix !== '' ? chunks.slice(0, -1) : chunks).map((c) => c.text)];
+    return { left, chunks, prefix, context, cwd: input.cwd, now: this.opts.now() };
+  }
 
+  /**
+   * History continuations of the context, filtered by the typed prefix and
+   * ranked level-major (longest matching context first, back-off only fills
+   * gaps), enriched with filesystem completion where a path is being typed.
+   */
+  private rankHistoryAndFs(scope: Scope): RankedCandidate[] {
+    const { left, chunks, prefix, context, cwd, now } = scope;
     const byText = new Map<
       string,
       { score: number; level: number; source: RankedCandidate['source']; isDir: boolean }
@@ -105,12 +152,11 @@ export class Predictor {
     // only the siblings from exactly that context are real alternatives (e.g. a
     // rarely used flag) — backoff backfill (level > 0) would be noise that
     // keeps sticking on endlessly. Only relevant without a typed prefix -> lazy.
-    const lineLikelyComplete =
-      prefix === '' && this.model.longestContinuations(context, input.cwd, now)[0]?.text === END;
+    const lineLikelyComplete = prefix === '' && this.model.longestContinuations(context, cwd, now)[0]?.text === END;
     const prefixLower = prefix.toLowerCase();
     const { token: fsToken, prefix: fsPrefix, rawPrefixLength } = shellPathToken(left);
 
-    for (const c of this.model.continuations(context, input.cwd, now)) {
+    for (const c of this.model.continuations(context, cwd, now)) {
       if (c.text === END) continue;
       if (lineLikelyComplete && c.level > 0) continue;
       if (!c.text.toLowerCase().startsWith(prefixLower)) continue;
@@ -129,7 +175,7 @@ export class Predictor {
       const fsAllowed =
         looksPathy || (!lineLikelyComplete && !precededByFlag(chunks, startIndex) && byText.size === 0);
       if (fsAllowed) {
-        for (const fsCandidate of completePathToken(fsToken, input.cwd, this.opts.fs, this.opts.homeDir)) {
+        for (const fsCandidate of completePathToken(fsToken, cwd, this.opts.fs, this.opts.homeDir)) {
           const name = fsCandidate.isDir ? fsCandidate.text.slice(0, -1) : fsCandidate.text;
           const existing = byText.get(name);
           if (existing) {
@@ -154,7 +200,9 @@ export class Predictor {
     // old commands findable, not let them dominate forever.
     const effectiveLevel = (meta: { level: number; score: number }): number =>
       prefix === '' && meta.score < this.config.staleThreshold ? meta.level + 1000 : meta.level;
-    const candidates: RankedCandidate[] = [...byText.entries()]
+    const quote = quoteContext(left);
+    const acceptedPrefixLength = escapeFsText(fsPrefix, quote).length;
+    return [...byText.entries()]
       .sort((a, b) => {
         const levelA = effectiveLevel(a[1]);
         const levelB = effectiveLevel(b[1]);
@@ -163,104 +211,92 @@ export class Predictor {
       .slice(0, this.config.topN)
       .map(([text, meta]) => {
         const raw = text + (meta.isDir ? '/' : '');
-        const quote = quoteContext(left);
-        const acceptedPrefixLength = escapeFsText(fsPrefix, quote).length;
         const merged =
-          meta.source === 'fs'
-            ? escapeFsText(raw, quote)
-            : mergeForward(this.model, context, text, input.cwd, now, this.config.merge);
+          meta.source === 'fs' ? escapeFsText(raw, quote) : mergeForward(this.model, context, text, cwd, now, this.config.merge);
         return {
           insert: meta.source === 'fs' ? merged.slice(acceptedPrefixLength) : merged.slice(prefix.length),
           display: merged,
           score: meta.score,
           source: meta.source,
-          ...(meta.source === 'fs'
-            ? {
-                acceptedPrefixLength,
-                replacePrefixLength: rawPrefixLength,
-              }
-            : {}),
+          ...(meta.source === 'fs' ? { acceptedPrefixLength, replacePrefixLength: rawPrefixLength } : {}),
         };
       });
+  }
 
-    // Magic handles only compete on the first token: the handle stands in for
-    // a whole command, so mid-line it can never be what the user means. They
-    // rank above every frecency candidate — the user asked for them by name.
-    const magic =
-      this.opts.names !== undefined && context.length === 1 && prefix !== ''
-        ? this.opts.names.match(prefix, input.cwd)
-        : [];
-    if (magic.length > 0) {
-      return { candidates: [...magic, ...candidates].slice(0, this.config.topN), prefix };
-    }
+  /**
+   * A fully typed word right before a fork: the merge stopped at once, the top
+   * candidate has nothing left to insert and Tab would be a dead key. The
+   * fork's branches are what belongs in the dropdown there — `cd projects`
+   * offers `/radio` and `/tabby`, not `projects` again. They outrank sibling
+   * prefix completions: the user typed this word to the end, the fork is the
+   * menu. The fork is read behind the candidate's own spelling, so a
+   * case-corrected `Projects` expands as well.
+   *
+   * Where the line usually ends (END carries at least the merge threshold)
+   * the plain word stays first, so the ghost stays quiet, and the branches
+   * follow in the dropdown — the same calm `mergeForward` keeps there.
+   */
+  private expandDeadFork(candidates: RankedCandidate[], scope: Scope): RankedCandidate[] {
+    const dead = candidates[0];
+    // An fs candidate replaces a shell-escaped token; its spelling is no chunk
+    // the model knows, so there is no fork to read behind it.
+    if (dead === undefined || dead.insert !== '' || dead.source === 'fs') return candidates;
+    const fork = forkBranches(
+      this.model,
+      [...scope.context, dead.display],
+      scope.cwd,
+      scope.now,
+      this.config.merge,
+      this.config.topN,
+    );
+    if (fork.branches.length === 0) return candidates;
+    const expanded: RankedCandidate[] = fork.branches.map((branch) => ({
+      insert: branch.text,
+      display: dead.display + branch.text,
+      score: branch.score,
+      source: 'history',
+    }));
+    const rest = candidates.filter((c) => c.insert !== '');
+    return fork.endShare >= this.config.merge.threshold ? [dead, ...expanded, ...rest] : [...expanded, ...rest];
+  }
 
-    return { candidates, prefix };
+  /**
+   * `cd` goes somewhere. A directory learned at home (`projects`) is the wrong
+   * answer inside a project however frecent it is. Candidates whose directory
+   * exists from here rank first; the rest is demoted, never dropped — the
+   * volume may simply be unmounted right now. Judged on the line as it would
+   * read after the accept, so `cdk deploy` is not a cd and `git pull && cd src`
+   * is one. One filesystem question per candidate, none without a filesystem.
+   */
+  private preferReachableCdTargets(candidates: RankedCandidate[], scope: Scope): RankedCandidate[] {
+    const fs = this.opts.fs;
+    if (fs === undefined) return candidates;
+    const reachable = (candidate: RankedCandidate): boolean => {
+      if (candidate.source === 'fs') return true; // exists by construction
+      const target = cdTarget(acceptedLine(scope.left, scope.left.length, candidate, scope.prefix.length));
+      return target === null || directoryExists(target, scope.cwd, fs, this.opts.homeDir);
+    };
+    return partition(candidates, reachable);
+  }
+
+  /**
+   * Magic handles only compete on the first token: the handle stands in for a
+   * whole command, so mid-line it can never be what the user means. They rank
+   * above every frecency candidate — the user asked for them by name.
+   */
+  private prependMagic(candidates: RankedCandidate[], scope: Scope): RankedCandidate[] {
+    if (this.opts.names === undefined || scope.context.length !== 1 || scope.prefix === '') return candidates;
+    const magic = this.opts.names.match(scope.prefix, scope.cwd);
+    return magic.length > 0 ? [...magic, ...candidates] : candidates;
   }
 }
 
-type QuoteContext = 'single' | 'double' | null;
-
-/** Escape only filesystem-derived text; learned shell syntax must stay intact. */
-function escapeFsText(text: string, quote: QuoteContext): string {
-  if (quote === 'single') return text.replaceAll("'", "'\\''");
-  if (quote === 'double') return text.replace(/[\\"$`]/g, '\\$&');
-  return text.replace(/[^A-Za-z0-9_@%+=:,./~-]/g, '\\$&');
-}
-
-/** Active shell quote immediately left of cursor, respecting backslash escapes. */
-function quoteContext(line: string): QuoteContext {
-  let quote: QuoteContext = null;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (quote !== 'single' && ch === '\\') {
-      i++;
-      continue;
-    }
-    if (ch === "'" && quote !== 'double') quote = quote === 'single' ? null : 'single';
-    if (ch === '"' && quote !== 'single') quote = quote === 'double' ? null : 'double';
-  }
-  return quote;
-}
-
-/** Decode current shell argument for filesystem lookup while retaining raw replacement length. */
-function shellPathToken(line: string): { token: string; prefix: string; rawPrefixLength: number } {
-  let token = '';
-  let quote: QuoteContext = null;
-  let rawPrefixStart = line.length;
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i] as string;
-    if (quote !== 'single' && ch === '\\') {
-      const escaped = line[i + 1];
-      if (escaped !== undefined) {
-        if (token === '') rawPrefixStart = i;
-        token += escaped;
-        i++;
-      }
-      continue;
-    }
-    if (ch === "'" && quote !== 'double') {
-      quote = quote === 'single' ? null : 'single';
-      if (token === '') rawPrefixStart = i + 1;
-      continue;
-    }
-    if (ch === '"' && quote !== 'single') {
-      quote = quote === 'double' ? null : 'double';
-      if (token === '') rawPrefixStart = i + 1;
-      continue;
-    }
-    if (quote === null && (/\s/.test(ch) || '|&;<>()='.includes(ch))) {
-      token = '';
-      rawPrefixStart = i + 1;
-      continue;
-    }
-    if (token === '') rawPrefixStart = i;
-    token += ch;
-    if (ch === '/') rawPrefixStart = i + 1;
-  }
-
-  const slash = token.lastIndexOf('/');
-  return { token, prefix: token.slice(slash + 1), rawPrefixLength: line.length - rawPrefixStart };
+/** Stable split: every item `keep` accepts, in order, then every other item, in order. */
+function partition<T>(items: readonly T[], keep: (item: T) => boolean): T[] {
+  const kept: T[] = [];
+  const rest: T[] = [];
+  for (const item of items) (keep(item) ? kept : rest).push(item);
+  return [...kept, ...rest];
 }
 
 /**

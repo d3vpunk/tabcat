@@ -10,7 +10,7 @@ import { HistoryEntry } from '../../src/engine/model.js';
 import { VERSION } from '../../src/version.js';
 import { TestClient, withTimeout } from './helpers.js';
 
-const NO_FS = { readdir: () => null };
+const NO_FS = { readdir: () => null, isDirectory: () => false };
 const CWD = '/work';
 
 let dir: string;
@@ -341,7 +341,7 @@ describe('daemon: names', () => {
   });
 
   it('badges the line the top candidate would produce', async () => {
-    // Parity with the REPL, which badges via acceptedLineFor: the suggestion
+    // Parity with the REPL, which badges via acceptedLine: the suggestion
     // completes to a named command even though the typed text does not prefix it.
     writeHistory(entry('deploy staging now'), entry('deploy staging now'));
     await daemon();

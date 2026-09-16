@@ -6,7 +6,7 @@ import { EngineHost } from '../../src/daemon/engine-host.js';
 import { HistoryEntry } from '../../src/engine/model.js';
 import { MagicName } from '../../src/engine/names.js';
 
-const NO_FS = { readdir: () => null };
+const NO_FS = { readdir: () => null, isDirectory: () => false };
 
 let dir: string;
 let historyFile: string;

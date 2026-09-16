@@ -26,8 +26,16 @@ export function predictor(entries: HistoryEntry[], fs?: FsLike, home?: string): 
 
 /** Fake filesystem: map from absolute directory to entries. */
 export function fakeFs(dirs: Record<string, FsEntry[]>): FsLike {
+  const isDirectory = (path: string): boolean => {
+    if (path in dirs) return true;
+    const slash = path.lastIndexOf('/');
+    const parent = slash <= 0 ? '/' : path.slice(0, slash);
+    const base = path.slice(slash + 1);
+    return (dirs[parent] ?? []).some((e) => e.isDir && e.name === base);
+  };
   return {
     readdir: (absoluteDir: string) => dirs[absoluteDir] ?? null,
+    isDirectory,
   };
 }
 

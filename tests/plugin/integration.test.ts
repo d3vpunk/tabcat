@@ -42,7 +42,7 @@ async function startRealDaemon(): Promise<void> {
   daemon = await startDaemon({
     socketPath,
     historyFile,
-    fs: { readdir: () => null },
+    fs: { readdir: () => null, isDirectory: () => false },
     homeDir: '/home/test',
     build: 'sync',
   });
