@@ -1,0 +1,156 @@
+---
+import { Image } from 'astro:assets';
+import logo from '../../../tabcat-logo.png';
+import '../styles/global.css';
+
+const repo = 'https://github.com/d3vpunk/tabcat';
+const docs = `${repo}/blob/main/docs`;
+const title = 'tabcat — Shell autocomplete that learns your commands';
+const description = 'Stop retyping the parts of commands that never change. A local-first shell autocomplete tool for zsh and bash, with a smart prompt that learns your history.';
+const canonical = Astro.site ? new URL(import.meta.env.BASE_URL, Astro.site).href : undefined;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#08080c" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+    {canonical && <link rel="canonical" href={canonical} />}
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    {canonical && <meta property="og:url" content={canonical} />}
+    {Astro.site && <meta property="og:image" content={new URL(logo.src, Astro.site).href} />}
+    <meta property="og:image:alt" content="tabcat: a cat perched on an autocomplete terminal" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="nav wrap">
+      <a class="wordmark" href={import.meta.env.BASE_URL} aria-label="tabcat home">tab<span>cat</span><span class="wordmark-dot" aria-hidden="true">.</span></a>
+      <nav aria-label="Main navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href={`${docs}/guide.md`}>Docs</a>
+        <a class="github-link" href={repo}>GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero wrap" aria-labelledby="hero-heading">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="status-dot"></span> YOUR HISTORY. FEWER KEYSTROKES.</p>
+          <h1 id="hero-heading">You’ve typed<br />this <span class="serif-word">before.</span><br /><span class="muted-heading">Let’s skip that part.</span></h1>
+          <p class="hero-description">Shell autocomplete that learns <em>your</em> commands. Tab through the familiar parts. Type what’s different. Keep moving.</p>
+          <div class="hero-actions">
+            <button class="install-button" data-copy="npm install -g tabcat" aria-label="Copy npm install -g tabcat" hidden><span aria-hidden="true">$</span> <code>npm install -g tabcat</code><span class="copy-icon" aria-hidden="true">⧉</span></button>
+            <a class="text-link" href="#start">Get started <span aria-hidden="true">↗</span></a>
+          </div>
+          <p class="requirements">For zsh &amp; bash <span>·</span> Node.js 20+ <span>·</span> Local-first</p>
+          <p class="copy-status" role="status" aria-live="polite"></p>
+        </div>
+        <div class="hero-art">
+          <Image src={logo} alt="tabcat: a smiling cat perched on a terminal, with a violet autocomplete selection" width={600} loading="eager" fetchpriority="high" />
+          <p class="art-caption"><span aria-hidden="true">↑</span> A little less typing. A little more purring.</p>
+        </div>
+      </section>
+
+      <section class="demo-section wrap" id="how-it-works" aria-labelledby="demo-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">01 / THE EVERYDAY DIFFERENCE</p><h2 id="demo-heading">Same command.<br /><span class="serif-word">Different ending.</span></h2></div>
+          <p>You know the command. Only the branch changes.<br />Why accept a whole old line just to edit it back?</p>
+        </div>
+        <div class="demo-layout">
+          <div class="terminal">
+            <div class="terminal-bar"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>tabcat ~/projects/my-app</span><span class="example-label">ILLUSTRATIVE DEMO</span></div>
+            <div class="terminal-body">
+              <p class="terminal-comment"># Previously run in this project</p>
+              <p class="history-line">git checkout develop</p>
+              <p class="history-line">git checkout feature/login</p>
+              <div class="prompt-line"><span class="prompt-symbol" aria-hidden="true">❯</span> <span id="demo-command">git ch</span><span class="cursor" aria-hidden="true"></span></div>
+              <div class="suggestion" id="demo-suggestion"><span>git checkout</span><span class="suggestion-tag">shared prefix</span></div>
+              <p class="terminal-hint" id="demo-hint">The beginning is familiar. The branch is your choice.</p>
+            </div>
+            <div class="terminal-bottom"><span>History-based completion</span><span>Nothing runs in your browser</span></div>
+          </div>
+          <div class="demo-notes">
+            <ol class="steps">
+              <li class="active" data-step="0"><span class="step-number">1</span><div><h3>Start with what you know.</h3><p>Type <code>git ch</code>. tabcat finds the familiar beginning in your history.</p></div></li>
+              <li data-step="1"><span class="step-number">2</span><div><h3>Tab through the repetition.</h3><p>Accept <code>git checkout </code>. Stop before the branch choice.</p></div></li>
+              <li data-step="2"><span class="step-number">3</span><div><h3>Make it today’s command.</h3><p>Type your new branch. No old argument to delete first.</p></div></li>
+            </ol>
+            <button class="demo-next" id="demo-next" hidden>Next: accept with Tab <span aria-hidden="true">→</span></button>
+            <p class="sr-only" id="demo-announcement" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+        <div class="benefit-strip">
+          <div><span class="small-label">NOT JUST WHOLE LINES</span><p>Complete the recurring parts.<br />Keep control of what changes.</p></div>
+          <div><span class="small-label">YOUR WORKING CONTEXT</span><p>Recent, frequent and local<br />commands get a head start.</p></div>
+          <div><span class="small-label">NO CLOUD REQUIRED</span><p>Your history stays on your machine.<br />No account. No telemetry.</p></div>
+        </div>
+      </section>
+
+      <section class="names-section wrap" aria-labelledby="names-heading">
+        <div class="names-copy"><p class="eyebrow">02 / A NAME WORTH REMEMBERING</p><h2 id="names-heading">Long command.<br /><span class="serif-word">Short name.</span></h2><p>Some commands deserve a place in your workflow, not in your memory. Give them a magic name.</p><p>Press <kbd>Ctrl</kbd> + <kbd>N</kbd>, choose a name, then <kbd>Ctrl</kbd> + <kbd>S</kbd> to save without running.</p><a class="text-link" href={`${docs}/guide.md#magic-names`}>Meet magic names <span aria-hidden="true">↗</span></a></div>
+        <div class="name-example"><div class="small-label">THE COMMAND YOU NEED</div><code class="long-command">docker compose -f compose.dev.yaml run --rm php vendor/bin/phpstan analyze src</code><div class="name-transform"><span aria-hidden="true">↓</span><span>Give it a name. Keep the full command.</span></div><div class="short-command"><span aria-hidden="true">❯</span> analyze <kbd>Tab</kbd></div><p>Expand to inspect. Add arguments. Run when ready.</p><div class="scope-note"><span class="scope-pill">This project</span> by default. Make it global when you want.</div></div>
+      </section>
+
+      <section class="start-section" id="start" aria-labelledby="start-heading">
+        <div class="wrap start-layout"><div><p class="eyebrow">03 / YOUR NEXT COMMAND STARTS HERE</p><h2 id="start-heading">Bring your history.<br /><span class="serif-word">Find your flow.</span></h2><p>Import once. Start with commands you already use.<br />No shell configuration changes needed.</p><p class="requirements">Node.js 20+ and zsh or bash required.</p><a class="text-link" href="https://www.npmjs.com/package/tabcat">View on npm <span aria-hidden="true">↗</span></a></div>
+          <div class="setup"><div class="setup-line"><span>01</span><div><p>Install tabcat</p><code>npm install -g tabcat</code></div></div><div class="setup-line"><span>02</span><div><p>Import your shell history</p><code>tabcat import</code></div></div><div class="setup-line"><span>03</span><div><p>Open your smart prompt</p><code>tabcat</code></div></div><p class="setup-footnote">Just looking? Use <code>npx tabcat import</code>, then <code>npx tabcat</code>. Leave the prompt with <kbd>Ctrl</kbd> + <kbd>D</kbd>.</p></div>
+        </div>
+      </section>
+
+      <section class="details-section wrap" aria-labelledby="details-heading"><div><p class="eyebrow">NO SURPRISES</p><h2 id="details-heading">A few things<br />worth knowing.</h2></div><div class="faq">
+        <details open><summary>Is this a replacement for my shell?</summary><p>It’s a smart prompt, not a persistent shell session. Each command runs in an isolated shell. Directory changes carry over; exports, functions and aliases defined during a session do not. Startup aliases are imported at launch. <a href={`${docs}/guide.md#shell-sessions`}>Read about shell sessions.</a></p></details>
+        <details><summary>What happens to my command history?</summary><p>Learning and prediction happen locally. Commands and magic names are stored under <code>~/.config/tabcat/</code> by default. Treat these files as sensitive shell history: arguments can contain secrets. Imported history has no directory context; tabcat learns that as you use it. <a href={`${docs}/reference.md#local-data`}>Storage details.</a></p></details>
+        <details><summary>Can I stay inside my existing zsh?</summary><p>Yes. The <a href={`${docs}/zsh-plugin.md`}>zsh plugin</a> adds completion to your existing shell session and shares learned history and names with the REPL. The REPL is the main interface and supports both zsh and bash.</p></details>
+        <details><summary>What about the macOS app?</summary><p>There’s also a <a href={`${repo}/blob/main/gui/macos/README.md`}>macOS overlay in beta</a>, for when you want to run a command without first opening a terminal. It uses the same prediction engine.</p></details>
+        <details><summary>Where can I follow the project?</summary><p>tabcat is young and evolving. Find <a href={`${repo}/releases`}>releases</a>, report an issue or contribute on <a href={repo}>GitHub</a>. For setup and shortcuts, start with the <a href={`${docs}/guide.md`}>REPL guide</a>.</p></details>
+      </div></section>
+    </main>
+
+    <footer class="footer wrap"><div><a class="wordmark" href={import.meta.env.BASE_URL}>tab<span>cat</span><span class="wordmark-dot" aria-hidden="true">.</span></a><p>Less repetition. More you.</p></div><nav aria-label="Footer navigation"><a href={`${docs}/guide.md`}>Documentation</a><a href={`${repo}/releases`}>Releases</a><a href={repo}>GitHub ↗</a></nav><span class="footer-note">Open source · MIT licensed</span></footer>
+
+    <script>
+      const copyButton = document.querySelector<HTMLButtonElement>('[data-copy]');
+      const status = document.querySelector<HTMLElement>('.copy-status');
+      if (copyButton && status && navigator.clipboard) {
+        copyButton.hidden = false;
+        copyButton.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(copyButton.dataset.copy!);
+            status.textContent = 'Copied. Your terminal is next.';
+          } catch {
+            status.textContent = 'Copy manually: npm install -g tabcat';
+          }
+        });
+      }
+
+      const next = document.querySelector<HTMLButtonElement>('#demo-next')!;
+      const command = document.querySelector<HTMLElement>('#demo-command')!;
+      const suggestion = document.querySelector<HTMLElement>('#demo-suggestion')!;
+      const hint = document.querySelector<HTMLElement>('#demo-hint')!;
+      const announcement = document.querySelector<HTMLElement>('#demo-announcement')!;
+      const stages = [
+        { command: 'git ch', hint: 'The beginning is familiar. The branch is your choice.', button: 'Next: accept with Tab →' },
+        { command: 'git checkout ', hint: 'Stable prefix accepted. Stopping where your branches differ.', button: 'Next: type your branch →' },
+        { command: 'git checkout feature/new-dashboard', hint: 'Your new command. No old branch to erase.', button: 'Replay the example ↺' },
+      ];
+      let step = 0;
+      next.hidden = false;
+      next.addEventListener('click', () => {
+        step = (step + 1) % stages.length;
+        const stage = stages[step];
+        command.textContent = stage.command;
+        hint.textContent = stage.hint;
+        next.textContent = stage.button;
+        suggestion.style.visibility = step === 0 ? 'visible' : 'hidden';
+        document.querySelectorAll('[data-step]').forEach((item, index) => item.classList.toggle('active', index === step));
+        announcement.textContent = `Step ${step + 1}: ${stage.command}. ${stage.hint}`;
+      });
+    </script>
+  </body>
+</html>
